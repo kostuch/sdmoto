@@ -13,10 +13,12 @@
 #include "SimpleList.h"															// Obsluga list dynamicznych
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
+#include <SerialRAM.h>															// EERAM
 #include "sdmoto.h"																// Konfiguracja kompilacji
 
 RemoteDebug Debug;																// Zdalny debug
-PCF857x	pcf8575(0x20, &Wire);													// Ekspander PCF8574T
+PCF857x	pcf8575(I2C_EXP_A, &Wire);												// Ekspander PCF8574T
+SerialRAM eeram;
 TFT_eSPI tft = TFT_eSPI();														// Wyswietlacz TFT
 SdFat sd;																		// Karta SD
 File dir;																		// Katalog na SD
@@ -69,6 +71,8 @@ void setup()
 	pcf8575.write(MUX_PIN, LOW);												// Przelaczenie multipleksera
 	setupPins();																// Ustawienie pinow GPIO
 	i2c_scan();
+	eeram.begin();																// EERAM
+	eeram.setAutoStore(true);													// Automatyczne zapamietywanie RAM
 
 	// ------------------------- SDCard
 	if (!sd.begin(SD_CONFIG)) Serial.println("Karta SD sie zesrala.");
@@ -112,29 +116,37 @@ void loop()
 {
 	if (pcf_signal)																// Dla wykrycia pojedynczego wcisnienia/puszczenia
 	{
+		static uint8_t y;
 		debugI("Przerwanie na PCF");
 		uint8_t i2c_state = pcf8575.read8();
 		debugI("Stan expandera: %d", i2c_state);
 		pcf_signal = false;
+		eeram.write(1, y);
+		y++;
 		// Po ewentualnej obsludze przerwania
 		attachInterrupt(I2C_IRQ_PIN, i2c_irq, FALLING);
 	}
 
 	if (imp_signal)
 	{
+		static uint8_t x;
 		debugI("Przerwanie IMP");
 		imp_signal = false;
+		eeram.write(0, x);
+		x++;
 		// Po ewentualnej obsludze przerwania
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
 
-	if ((millis() - test) > 100)												// DEBUG
+	if ((millis() - test) > 500)												// DEBUG
 	{
 		analogWrite(BL_PIN, pwm_val);
 		test = millis();
 
-		if (pwm_val < 1023) pwm_val += 20;
+		if (pwm_val < 1023) pwm_val += 100;
 		else pwm_val = 0;
+		debugI("Pod adresem 0: %d", eeram.read(0));
+		debugI("Pod adresem 1: %d", eeram.read(1));
 	}
 
 	if (connected) web_server.handleClient();

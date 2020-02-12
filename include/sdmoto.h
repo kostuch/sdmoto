@@ -7,6 +7,8 @@
 #define HW_MAJOR_VER	1														// Wersja Hardware
 #define HW_MINOR_VER	0
 
+#define I2C_EXP_A		0x20
+#define I2C_EERAM_A		0x50
 #define SDA_PAD			4														// GPIO
 #define SCL_PAD			5														// GPIO
 #define BL_PIN			15														// GPIO
