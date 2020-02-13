@@ -16,6 +16,8 @@
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
 #include <SerialRAM.h>															// EERAM
+//#include <Adafruit_GPS.h>														// GPS
+#include "TinyGPS++.h"
 #include "sdmoto.h"																// Konfiguracja kompilacji
 
 Ticker				every_sec_tmr;												// Timer sekundowy
@@ -23,6 +25,8 @@ RemoteDebug			Debug;														// Zdalny debug
 PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
 SerialRAM			eeram;														// EERAM
 TFT_eSPI 			tft = TFT_eSPI();											// Wyswietlacz TFT
+//Adafruit_GPS		gps(&Serial);												// GPS
+TinyGPSPlus			gps;
 SdFat				sd;															// Karta SD
 File				dir;														// Katalog na SD
 File				file;														// Plik na SD
@@ -62,7 +66,8 @@ void mux_switch(enum MUX_STATES state)
 
 void setup()
 {
-	Serial.begin(115200);														// Init UART
+	Serial.begin(9600);															// Init UART (predkosc jak dla GPS)
+	//gps.begin(9600);															// Init GPS
 	SPIFFS.begin();																// Init SPIFFS
 	readConf();																	// Odczyt konfiguracji urzadzenia
 	startWebServer();															// Start Serwera web
@@ -135,6 +140,22 @@ void loop()
 
 	if (connected) web_server.handleClient();
 
+	//gps.read();																	// Odczyt z gps
+	/*
+		if (gps.newNMEAreceived())
+		{
+			//char *nmea = gps.lastNMEA();
+			//debugI("%s", nmea);
+
+			if (((pcf8575.read8() & 0xF8) ^ 0xF8) == 128)
+			{
+				gps.parse(gps.lastNMEA());														// Przetwarzanie sentencji NMEA
+				debugI("parsed!");
+			}
+		}
+	 */
+	while (Serial.available()) gps.encode(Serial.read());						// Obsluga transmisji NMEA z GPS
+
 	Debug.handle();																// Obsluga Remote Debug
 }
 
@@ -145,8 +166,14 @@ void everySecTask()
 	if (pwm_val < 1023) pwm_val += 200;
 	else pwm_val = 0;
 
-	uint16_t pomiar = analogRead(A0);
-	debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
+	//uint16_t pomiar = analogRead(A0);
+	//debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
+	if (gps.date.isUpdated())
+	{
+		debugI("Data: %d-%d-%d", gps.date.day(), gps.date.month(), gps.date.year());
+		debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
+	}
+	else debugI("Nic...");
 }
 
 void setupPins()
