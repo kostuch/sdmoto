@@ -3,7 +3,7 @@
 #ifndef SDMOTO_H_
 #define SDMOTO_H_
 
-#define HOST_NAME		"sdmoto18"												// Na potrzeby RemoteDebug
+//#define HOST_NAME		"sdmoto18"												// Na potrzeby RemoteDebug
 #define HW_MAJOR_VER	1														// Wersja Hardware
 #define HW_MINOR_VER	0
 
@@ -18,18 +18,42 @@
 #define TFT_CS_PIN		0														// I2C bit
 #define SDC_CS_PIN		1														// I2C bit
 #define MUX_PIN			2														// I2C bit
+#define KEY_RT			3														// I2C bit
+#define KEY_LT			4														// I2C bit
+#define KEY_UP			5														// I2C bit
+#define KEY_DN			6														// I2C bit
+#define KEY_RST			7														// I2C bit
+// EERAM adresy
+#define EERAM_BASE	0x0000														// Pierwszy adres w EERAM
+#define LAST_SCREEN	EERAM_BASE													// Ostatni ekran
+#define DIST1		(LAST_SCREEN + 1)											// Dystans odcinka (impulsy lub dystans)
+#define DIST2		(DIST1 + 4)													// Dystans calkowity (impulsy lub dystans)
+#define LAST_WPT	(DIST2 + 4)													// Ostatni waypoint z listy do ktorego byla nawigacja
+#define DIST_CAL	(LAST_WPT + 2)												// Kalibracja dystansu
+#define VOLT_CAL	(DIST_CAL + 2)												// Kalibracja napiecia
+#define TEMP_CAL	(VOLT_CAL + 2)												// Kalibracja temperatury
+
+enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
+enum BUTTONS		{BTN_RST = 128, BTN_UP = 32, BTN_DN = 64, BTN_LT = 16, BTN_RT = 8};
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
-
 bool connected;																	// Flaga WiFi
+bool internet;																	// Flaga dostepu do Internetu
 bool bit_state;																	// DEBUG
-bool pcf_signal;																// Flaga przerwania z expandera
-bool imp_signal;
+volatile bool pcf_signal;														// Flaga przerwania z expandera
+volatile bool imp_signal;														// Flaga przerwania z impulsu
+enum MUX_STATES mux_state;														// Stan multipleksera
 
+void welcomeScreen(void);
+bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
+void everySecTask(void);
+void mux_switch(enum MUX_STATES state);
 void i2c_irq(void);
 void imp_irq(void);
+void tft_cs(bool enabled);
+void eeram_save16(int16_t addr, uint16_t val);
+void eeram_save32(int16_t addr, uint32_t val);
 void setupPins(void);															// Ustawienie pinow GPIO
-void i2c_scan(void);															// DEBUG
 void readConf(void);															// Odczyt konfiguracji urzadzenia
 void startWebServer(void);														// Web server
 void initWiFi(void);															// Inicjalizacja WiFi
@@ -40,16 +64,14 @@ void handleLogin2(void);
 void handleFWUpdate(void);
 void handleFWUpdate2(void);
 void handleFileUpload(void);
+bool handleFileRead(String path);
+String handleCalibration(void);
+String SPIFFS_list(void);
+String getContentType(String filename);
+String HTMLHeader(void);
+String HTMLFooter(void);
 
 /*
-#define KEY_RT			3														// I2C bit
-#define KEY_LT			4														// I2C bit
-#define KEY_UP			5														// I2C bit
-#define KEY_DN			6														// I2C bit
-#define KEY_RST			7														// I2C bit
-
-#define I2C_EXP_A		0x20													// Adres PCF8574
-#define I2C_EERAM_A		0x60													// Adres 47L04
 
 #define LONG_PRESS		2000													// Czas dlugiego wcisniecia
 #define IMP_DELAY		10														// Minimalny odstep miedzy zewnetrznymi impulsami
@@ -62,23 +84,12 @@ void handleFileUpload(void);
 #define COMBO_CAL_VOLT	1
 #define COMBO_CAL_TEMP	2
 
-// EERAM adresy
-#define EERAM_BASE	0x0000														// Pierwszy adres w EERAM
-#define LAST_SCREEN	EERAM_BASE													// Ostatni ekran
-#define DIST1		(LAST_SCREEN + 1)											// Dystans odcinka (impulsy lub dystans)
-#define DIST2		(DIST1 + 4)													// Dystans calkowity (impulsy lub dystans)
-#define LAST_WPT	(DIST2 + 4)													// Ostatni waypoint z listy do ktorego byla nawigacja
-#define DIST_CAL	(LAST_WPT + 2)												// Kalibracja dystansu
-#define VOLT_CAL	(DIST_CAL + 2)												// Kalibracja napiecia
-#define TEMP_CAL	(VOLT_CAL + 2)												// Kalibracja temperatury
-
 enum SPI_DEVS		{TFT, SD};
 enum MUX_STATES		{STARTUP, RUNTIME};
 enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEMORY, SD_OK, SD_NOOK, SD_OFF};
 enum DEVICE_STATES	{BOOT, RUN, SET, BROWSE};
 enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS};
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};
-enum BUTTONS		{BTN_RST = 0, BTN_UP = 1, BTN_DN = 2, BTN_LT = 3, BTN_RT = 4};
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};
 
@@ -96,7 +107,6 @@ typedef struct
 } point_t;
 
 cal_t calibrations;
-bool connected;																	// WiFi wlaczone
 bool changed_volt_cal;
 bool changed_temp_cal;
 volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki dystansow i predkosci (nie dla GPS!)

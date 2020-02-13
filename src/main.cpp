@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>																// I2C
 #include <SPI.h>																// SPI
+#include <Ticker.h>																// Scheduler
 #include <SdFat.h>																// SdFat (2.0 beta)
 #include <FS.h>																	// SPIFFS
 #include <pcf8574_esp.h>														// PCF8574/PCF8575
@@ -11,25 +12,34 @@
 #include <ESP8266HTTPClient.h>													// OTA http://www.skeletondevices.com
 #include <ESP8266httpUpdate.h>													// OTA http://www.skeletondevices.com
 #include "SimpleList.h"															// Obsluga list dynamicznych
+//#include <TJpg_Decoder.h>														// Dekoder jpg
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
 #include <SerialRAM.h>															// EERAM
 #include "sdmoto.h"																// Konfiguracja kompilacji
 
-RemoteDebug Debug;																// Zdalny debug
-PCF857x	pcf8575(I2C_EXP_A, &Wire);												// Ekspander PCF8574T
-SerialRAM eeram;
-TFT_eSPI tft = TFT_eSPI();														// Wyswietlacz TFT
-SdFat sd;																		// Karta SD
-File dir;																		// Katalog na SD
-File file;																		// Plik na SD
-ESP8266WebServer web_server;													// Web server
-WebConfig conf;																	// Konfigurator webowy
-fs::File SPIFFS_file;															// Plik na SPIFFS
+Ticker				every_sec_tmr;												// Timer sekundowy
+RemoteDebug			Debug;														// Zdalny debug
+PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
+SerialRAM			eeram;														// EERAM
+TFT_eSPI 			tft = TFT_eSPI();											// Wyswietlacz TFT
+SdFat				sd;															// Karta SD
+File				dir;														// Katalog na SD
+File				file;														// Plik na SD
+ESP8266WebServer	web_server;													// Web server
+WebConfig			conf;														// Konfigurator webowy
+fs::File			SPIFFS_file;												// Plik na SPIFFS
+WiFiEventHandler	SAPstationConnectedHandler;
+WiFiEventHandler	SAPstationDisconnectedHandler;
+WiFiEventHandler	STAstationGotIPHandler;
+WiFiEventHandler	STAstationDisconnectedHandler;
+WiFiEventHandler	wifiModeChanged;
 
 #define SD_CS_PIN 0 															// Fake value dla SdFat
 #define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI)							// Magia dla SdFat
-void sdCsInit(SdCsPin_t pin) {}													// Inicjalizacja CS (Puste!)
+
+void sdCsInit(SdCsPin_t pin)
+{}																				// Inicjalizacja CS (Puste!)
 
 void sdCsWrite(SdCsPin_t pin, bool level)
 {
@@ -41,23 +51,14 @@ void tft_cs(bool enabled)
 	pcf8575.write(TFT_CS_PIN, !enabled);										// CS dla TFT
 }
 
-String SPIFFS_list(void);
-bool handleFileRead(String path);
-String getContentType(String filename);
-
-String handleCalibration(void);
-String HTMLHeader(void);
-String HTMLFooter(void);
-uint16_t kalibracja = 100;
-WiFiEventHandler SAPstationConnectedHandler;
-WiFiEventHandler SAPstationDisconnectedHandler;
-WiFiEventHandler STAstationGotIPHandler;
-WiFiEventHandler STAstationDisconnectedHandler;
-WiFiEventHandler wifiModeChanged;
-
-uint32_t czas = millis();
-uint32_t test = millis();
 uint16_t pwm_val = 0;
+uint16_t kalibracja = 100;
+
+void mux_switch(enum MUX_STATES state)
+{
+	pcf8575.write(MUX_PIN, state);
+	mux_state = state;
+}
 
 void setup()
 {
@@ -68,9 +69,8 @@ void setup()
 	Wire.setClock(400000);														// Predkosc I2C (Max!!!)
 	Wire.begin(SDA_PAD, SCL_PAD);												// I2C
 	pcf8575.begin();															// Inicjalizacja expandera
-	pcf8575.write(MUX_PIN, LOW);												// Przelaczenie multipleksera
 	setupPins();																// Ustawienie pinow GPIO
-	i2c_scan();
+	mux_switch(RUNTIME);														// Multiplekser w pozycji roboczej
 	eeram.begin();																// EERAM
 	eeram.setAutoStore(true);													// Automatyczne zapamietywanie RAM
 
@@ -105,10 +105,11 @@ void setup()
 	tft.drawCentreString("Test ST7735!", tft.width() / 2, tft.height() / 2, 2);
 	tft.drawCentreString(String(millis()), tft.width() / 2, tft.height() / 4, 2);
 	// ------------------------- Remote debug
-	Debug.begin(HOST_NAME);														// Init socketa
+	Debug.begin(conf.getApName());												// Init socketa
 	Debug.setResetCmdEnabled(true);												// Reset dozwolony
 	Debug.showProfiler(true);													// Profiler (pomiar czsasu)
 	Debug.showColors(true);														// Kolorki
+	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	Serial.println("Koniec SETUP!");
 }
 
@@ -116,42 +117,36 @@ void loop()
 {
 	if (pcf_signal)																// Dla wykrycia pojedynczego wcisnienia/puszczenia
 	{
-		static uint8_t y;
 		debugI("Przerwanie na PCF");
-		uint8_t i2c_state = pcf8575.read8();
+		uint8_t i2c_state = (pcf8575.read8() & 0xF8) ^ 0xF8;					// 5 najstarszych bitow
 		debugI("Stan expandera: %d", i2c_state);
 		pcf_signal = false;
-		eeram.write(1, y);
-		y++;
 		// Po ewentualnej obsludze przerwania
 		attachInterrupt(I2C_IRQ_PIN, i2c_irq, FALLING);
 	}
 
 	if (imp_signal)
 	{
-		static uint8_t x;
 		debugI("Przerwanie IMP");
 		imp_signal = false;
-		eeram.write(0, x);
-		x++;
 		// Po ewentualnej obsludze przerwania
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
 
-	if ((millis() - test) > 500)												// DEBUG
-	{
-		analogWrite(BL_PIN, pwm_val);
-		test = millis();
-
-		if (pwm_val < 1023) pwm_val += 100;
-		else pwm_val = 0;
-		debugI("Pod adresem 0: %d", eeram.read(0));
-		debugI("Pod adresem 1: %d", eeram.read(1));
-	}
-
 	if (connected) web_server.handleClient();
 
-	Debug.handle();
+	Debug.handle();																// Obsluga Remote Debug
+}
+
+void everySecTask()
+{
+	analogWrite(BL_PIN, pwm_val);												// DEBUG
+
+	if (pwm_val < 1023) pwm_val += 200;
+	else pwm_val = 0;
+
+	uint16_t pomiar = analogRead(A0);
+	debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
 }
 
 void setupPins()
@@ -176,6 +171,17 @@ ICACHE_RAM_ATTR void i2c_irq(void)
 {
 	pcf_signal = true;															// Flaga zdarzenia na ekspanderze
 	detachInterrupt(I2C_IRQ_PIN);												// Odepnij przerwania na wszelki wypadek
+}
+
+void eeram_save16(int16_t addr, uint16_t val)
+{
+	eeram.write(addr, val);														// LSB
+	eeram.write(addr + 1, val >> 8);											// MSB
+}
+
+void eeram_save32(int16_t addr, uint32_t val)
+{
+	for (uint8_t a = 0; a < 4; a++)	eeram.write(addr + a, val >> (8 * a));		// Czterobajtowa zmienna (zapis od LSB)
 }
 
 void readConf()
@@ -497,9 +503,12 @@ void initWiFi()
 
 	Serial.println();
 
-	if (wifi_multi.run() == WL_CONNECTED) connected = true;
-
-	if (!connected)
+	if (wifi_multi.run() == WL_CONNECTED)
+	{
+		internet = true;
+		WiFi.hostname(conf.getApName());
+	}
+	else
 	{
 		IPAddress local_IP(10, 0, 0, 1);
 		IPAddress gateway(10, 0, 0, 1);
@@ -509,8 +518,9 @@ void initWiFi()
 		WiFi.softAP(conf.getApName(), conf.getValue("dev_pwd"));
 		Serial.println(conf.getApName());
 		Serial.println(WiFi.softAPIP());
-		connected = true;
 	}
+
+	connected = true;
 }
 
 void update_started(void)
@@ -793,38 +803,26 @@ String HTMLFooter()
 	return f;
 }
 
-void i2c_scan(void)
+bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 {
-	uint8_t err, i2c_address;
-	int nDevices;
-	nDevices = 0;
+	// Stop further decoding as image is running off bottom of screen
+	if ( y >= tft.height() ) return 0;
 
-	for (i2c_address = 1; i2c_address < 127; i2c_address++ )
-	{
-		Wire.beginTransmission(i2c_address);
-		err = Wire.endTransmission();
-
-		if (err == 0)
-		{
-			Serial.println("0x");
-
-			if (i2c_address < 16)
-				Serial.println("0");
-
-			Serial.println(i2c_address, 16);
-			Serial.println("  ");
-			nDevices++;
-		}
-		else if (err == 4)
-		{
-			debugE("Unknow I2C error at address 0x");
-
-			if (i2c_address < 16)
-				Serial.println("0");
-
-			Serial.println(i2c_address, 16);
-		}
-	}
-
-	if (nDevices == 0) Serial.println("No I2C devices!");
+	// This function will clip the image block rendering automatically at the TFT boundaries
+	tft.pushImage(x, y, w, h, bitmap);
+	// This might work instead if you adapt the sketch to use the Adafruit_GFX library
+	// tft.drawRGBBitmap(x, y, bitmap, w, h);
+	// Return 1 to decode next block
+	return 1;
 }
+
+/* void welcomeScreen()
+{
+	TJpgDec.setJpgScale(1);
+	TJpgDec.setSwapBytes(true);
+	TJpgDec.setCallback(tftImgOutput);
+	TJpgDec.drawFsJpg(0, 0, "/skeleton.jpg");
+	tft.printf("FW: %d", FW_VERSION);
+	tft.printf("HW: %d.%d", HW_MAJOR_VER, HW_MINOR_VER);
+}
+ */
