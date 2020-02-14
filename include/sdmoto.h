@@ -32,9 +32,15 @@
 #define DIST_CAL	(LAST_WPT + 2)												// Kalibracja dystansu
 #define VOLT_CAL	(DIST_CAL + 2)												// Kalibracja napiecia
 #define TEMP_CAL	(VOLT_CAL + 2)												// Kalibracja temperatury
+#define LONG_PRESS	500															// Czas dlugiego wcisniecia [ms]
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
-enum BUTTONS		{BTN_RST = 128, BTN_UP = 32, BTN_DN = 64, BTN_LT = 16, BTN_RT = 8};
+enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 128, BTN_UP = 32, BTN_DN = 64, BTN_LT = 16, BTN_RT = 8};
+enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEMORY, SD_OK, SD_NOOK, SD_OFF};
+enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS};			// Ekrany
+enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
+enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
+enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 bool connected;																	// Flaga WiFi
@@ -43,6 +49,10 @@ bool bit_state;																	// DEBUG
 volatile bool pcf_signal;														// Flaga przerwania z expandera
 volatile bool imp_signal;														// Flaga przerwania z impulsu
 enum MUX_STATES mux_state;														// Stan multipleksera
+enum SCREENS screen;															// Wyswietlany ekran
+enum NAVI_STATES navi_state;													// Stan nawigacji
+enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
+enum TIMER_STATES timer_state;													// Stan stopera
 
 void welcomeScreen(void);
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
@@ -51,6 +61,13 @@ void mux_switch(enum MUX_STATES state);
 void i2c_irq(void);
 void imp_irq(void);
 void tft_cs(bool enabled);
+void bootstrap(void);
+void btnCheck(void);
+void keyShortPress(enum BUTTONS button);
+void keyLongPress(enum BUTTONS button);
+void prevScr(void);
+void nextScr(void);
+void openScr(enum SCREENS screen);
 void eeram_save16(int16_t addr, uint16_t val);
 void eeram_save32(int16_t addr, uint32_t val);
 void setupPins(void);															// Ustawienie pinow GPIO
@@ -67,13 +84,13 @@ void handleFileUpload(void);
 bool handleFileRead(String path);
 String handleCalibration(void);
 String SPIFFS_list(void);
+void SD_list(void);
 String getContentType(String filename);
 String HTMLHeader(void);
 String HTMLFooter(void);
 
 /*
 
-#define LONG_PRESS		2000													// Czas dlugiego wcisniecia
 #define IMP_DELAY		10														// Minimalny odstep miedzy zewnetrznymi impulsami
 
 #define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
@@ -83,15 +100,6 @@ String HTMLFooter(void);
 #define COMBO_CAL_DIST	0 														// Numer bitu - numer kontrolki
 #define COMBO_CAL_VOLT	1
 #define COMBO_CAL_TEMP	2
-
-enum SPI_DEVS		{TFT, SD};
-enum MUX_STATES		{STARTUP, RUNTIME};
-enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEMORY, SD_OK, SD_NOOK, SD_OFF};
-enum DEVICE_STATES	{BOOT, RUN, SET, BROWSE};
-enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS};
-enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};
-enum BTN_MODES		{CHG_SCR, CHG_CTRL};
-enum TIMER_STATES	{TMR_STOP, TMR_RUN};
 
 typedef struct
 {
@@ -110,53 +118,22 @@ cal_t calibrations;
 bool changed_volt_cal;
 bool changed_temp_cal;
 volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki dystansow i predkosci (nie dla GPS!)
-volatile bool pcf_signal_flag;													// Sygnal przerwania z ekspandera
-enum DEVICE_STATES device_state;												// Stan urzadzenia
-enum SCREENS screen;															// Wyswietlany ekran
-enum NAVI_STATES navi_state;													// Stan nawigacji
-enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
-enum TIMER_STATES timer_state;													// Stan stopera
 uint32_t gps_dist1, gps_dist2;													// Dystanse z GPS
 uint32_t imp_dist1, imp_dist2, dist4speed;										// Dystanse z impulsatora
 uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie
 float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniecie)																				// Najstarszy bit ustawiony, jezeli kontrolka aktywna
 
-void welcome_screen(void);
-bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
-void reset_device(void);
-void update_fw(void);
-void base_version(void);
-void run_ffs_browser(void);
-void SPIFFS_upload(void);
-void SPIFFS_list(void);
-
-void rd_conf(void);
 void save_device_config(void);
 void save_config_cb(void);
 void prev_scr(void);
 void next_scr(void);
 void (*scr_close)(void);
 void mux_switch(enum MUX_STATES state);
-void tft_cs(bool state);
-void tft_tcs(bool state);
-void set_gpio0(void);
-void set_gpio2(void);
-void imp_irq(void);
-void i2c_irq(void);
 void read_distances(void);
-void eeram_save16(int16_t addr, uint16_t val);
-void eeram_save32(int16_t addr, uint32_t val);
-void check_pcf_int(void);
-void every_sec_task(void);
 void render_toolbar(enum TOOLBAR_ITEMS item);
 void open_screen(enum SCREENS scr);
 void key_long_press(enum BUTTONS btn);
 void key_short_press(enum BUTTONS btn);
-void rd_conf(void);
-void handleRoot(void);
-void handleFileUpload(void);
-bool init_wifi(void);
-void start_conf(void);
 void save_time(void);
 void btn_dist_cal(void);
 void btn_rm_times(void);
@@ -165,13 +142,10 @@ void btn_save_wpt(void);
 void btn_nav2wpt(void);
 void volt_cal_up(void);
 void volt_cal_dn(void);
-void temp_cal_up(void);
-void temp_cal_dn(void);
 void update_compass(uint16_t course);
 void make_trt_mtx(int16_t x, int16_t y, float phi);
 point_t mtx_mul_vec(float mtx[], point_t xy);
 void update_speed(uint8_t speed);
 void update_volt(uint8_t volt);
-void update_temp(int8_t temp);
 */
 #endif /* SDMOTO_H_ */

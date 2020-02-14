@@ -16,7 +16,6 @@
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
 #include <SerialRAM.h>															// EERAM
-//#include <Adafruit_GPS.h>														// GPS
 #include "TinyGPS++.h"
 #include "sdmoto.h"																// Konfiguracja kompilacji
 
@@ -67,44 +66,21 @@ void mux_switch(enum MUX_STATES state)
 void setup()
 {
 	Serial.begin(9600);															// Init UART (predkosc jak dla GPS)
-	//gps.begin(9600);															// Init GPS
 	SPIFFS.begin();																// Init SPIFFS
-	readConf();																	// Odczyt konfiguracji urzadzenia
-	startWebServer();															// Start Serwera web
 	Wire.setClock(400000);														// Predkosc I2C (Max!!!)
-	Wire.begin(SDA_PAD, SCL_PAD);												// I2C
-	pcf8575.begin();															// Inicjalizacja expandera
+	Wire.begin(SDA_PAD, SCL_PAD);												// Init I2C
+	pcf8575.begin();															// Init PCF8574
 	setupPins();																// Ustawienie pinow GPIO
 	mux_switch(RUNTIME);														// Multiplekser w pozycji roboczej
-	eeram.begin();																// EERAM
+	bootstrap();																// Test czy coś wcisniete przy uruchamianiu
+	eeram.begin();																// Init EERAM
 	eeram.setAutoStore(true);													// Automatyczne zapamietywanie RAM
 
-	// ------------------------- SDCard
-	if (!sd.begin(SD_CONFIG)) Serial.println("Karta SD sie zesrala.");
-	else
-	{
-		if (!dir.open("/"))	Serial.println("dir.open failed");
+	if (!sd.begin(SD_CONFIG)) Serial.println("Karta SD sie zesrala.");			// Init SDCard
 
-		while (file.openNext(&dir, O_RDONLY))
-		{
-			file.printFileSize(&Serial);
-			Serial.write(' ');
-			file.printModifyDateTime(&Serial);
-			Serial.write(' ');
-			file.printName(&Serial);
-
-			if (file.isDir()) Serial.write('/');
-
-			Serial.println();
-			file.close();
-		}
-
-		if (dir.getError())	Serial.println("openNext failed");
-		else Serial.println("Done!");
-	}
-
-	// ------------------------- TFT
-	tft.init(NULL, tft_cs, NULL, NULL); // Init TFT (DC func, CS func, RST func, TOUCH_CS, CS via driver)
+	readConf();																	// Odczyt konfiguracji urzadzenia
+	startWebServer();															// Start Serwera web
+	tft.init(NULL, tft_cs, NULL, NULL);											// Init TFT (DC, CS, RST, TCS, CS via driver)
 	tft.setRotation(1);
 	tft.fillScreen(TFT_BLACK);
 	tft.drawCentreString("Test ST7735!", tft.width() / 2, tft.height() / 2, 2);
@@ -120,43 +96,52 @@ void setup()
 
 void loop()
 {
-	if (pcf_signal)																// Dla wykrycia pojedynczego wcisnienia/puszczenia
-	{
-		debugI("Przerwanie na PCF");
-		uint8_t i2c_state = (pcf8575.read8() & 0xF8) ^ 0xF8;					// 5 najstarszych bitow
-		debugI("Stan expandera: %d", i2c_state);
-		pcf_signal = false;
-		// Po ewentualnej obsludze przerwania
-		attachInterrupt(I2C_IRQ_PIN, i2c_irq, FALLING);
-	}
+	if (pcf_signal) btnCheck();													// Okresl stan przyciskow
 
 	if (imp_signal)
 	{
 		debugI("Przerwanie IMP");
-		imp_signal = false;
-		// Po ewentualnej obsludze przerwania
+		// Po obsludze przerwania
+		imp_signal = false;														// Przerwanie obsluzone
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
 
-	if (connected) web_server.handleClient();
+	if (connected) web_server.handleClient();									// Obsluga Web serwera
 
-	//gps.read();																	// Odczyt z gps
-	/*
-		if (gps.newNMEAreceived())
-		{
-			//char *nmea = gps.lastNMEA();
-			//debugI("%s", nmea);
-
-			if (((pcf8575.read8() & 0xF8) ^ 0xF8) == 128)
-			{
-				gps.parse(gps.lastNMEA());														// Przetwarzanie sentencji NMEA
-				debugI("parsed!");
-			}
-		}
-	 */
 	while (Serial.available()) gps.encode(Serial.read());						// Obsluga transmisji NMEA z GPS
 
 	Debug.handle();																// Obsluga Remote Debug
+}
+
+void bootstrap()
+{
+	if (((pcf8575.read8() & 0xF8) ^ 0xF8) == BTN_RST)							// Jezeli wcisniety przycisk RST
+	{
+		Dir dir = SPIFFS.openDir("/");
+		SPIFFS_file = SPIFFS.open("/firmware.bin", "r");						// Otworz plik z SPIFFS
+		uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+		debugI("max free sketchspace = %d\r\n", maxSketchSpace);
+
+		if (!Update.begin(maxSketchSpace, U_FLASH))								// Poczatek odtwarzania
+		{
+			//start with max available size
+			//Update.printError(Serial);
+			debugE("ERROR");
+		}
+
+		while (file.available())												// Do konca pliku
+		{
+			uint8_t ibuffer[128];
+			file.read((uint8_t *)ibuffer, 128);
+			Update.write(ibuffer, sizeof(ibuffer));
+		}
+
+		debugI("Koniec odtwarzania!");
+		debugI("Wynik: %d", Update.end(true));
+		file.close();
+		mux_switch(STARTUP);													// Multiplekser w pozycji poczatkowej
+		ESP.restart();															// Restart
+	}
 }
 
 void everySecTask()
@@ -170,10 +155,11 @@ void everySecTask()
 	//debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
 	if (gps.date.isUpdated())
 	{
-		debugI("Data: %d-%d-%d", gps.date.day(), gps.date.month(), gps.date.year());
+		debugI("Data: %02d-%02d-%d %02d:%02d:%02d",
+		       gps.date.day(), gps.date.month(), gps.date.year(),
+		       gps.time.hour(), gps.time.minute(), gps.time.second());
 		debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
 	}
-	else debugI("Nic...");
 }
 
 void setupPins()
@@ -197,7 +183,6 @@ ICACHE_RAM_ATTR void imp_irq(void)
 ICACHE_RAM_ATTR void i2c_irq(void)
 {
 	pcf_signal = true;															// Flaga zdarzenia na ekspanderze
-	detachInterrupt(I2C_IRQ_PIN);												// Odepnij przerwania na wszelki wypadek
 }
 
 void eeram_save16(int16_t addr, uint16_t val)
@@ -302,37 +287,6 @@ void readConf()
 	conf.setDescription(params);
 	conf.readConfig();
 }
-
-/*
-void base_version()
-{
-	Dir dir = SPIFFS.openDir("/");
-	digitalWrite(BUILTIN_LED, LOW);
-	File file = SPIFFS.open("/ver_1000.bin", "r");
-	uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-	Serial.printf("max free sketchspace = %d\r\n", maxSketchSpace);
-
-	if (!Update.begin(maxSketchSpace, U_FLASH))
-	{
-		//start with max available size
-		Update.printError(Serial);
-		Serial.println("ERROR");
-	}
-
-	while (file.available())
-	{
-		uint8_t ibuffer[128];
-		file.read((uint8_t *)ibuffer, 128);
-		Update.write(ibuffer, sizeof(ibuffer));
-	}
-
-	Serial.print("Koniec!");
-	Serial.print(Update.end(true));
-	digitalWrite(BUILTIN_LED, HIGH);
-	file.close();
-	ESP.restart();
-}
- */
 
 String getContentType(String filename)
 {
@@ -851,5 +805,495 @@ bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap
 	TJpgDec.drawFsJpg(0, 0, "/skeleton.jpg");
 	tft.printf("FW: %d", FW_VERSION);
 	tft.printf("HW: %d.%d", HW_MAJOR_VER, HW_MINOR_VER);
+}
+ */
+
+void SD_list()
+{
+	if (!dir.open("/"))	Serial.println("dir.open failed");
+
+	while (file.openNext(&dir, O_RDONLY))
+	{
+		file.printFileSize(&Serial);
+		Serial.write(' ');
+		file.printModifyDateTime(&Serial);
+		Serial.write(' ');
+		file.printName(&Serial);
+
+		if (file.isDir()) Serial.write('/');
+
+		Serial.println();
+		file.close();
+	}
+
+	if (dir.getError())	Serial.println("openNext failed");
+	else Serial.println("Done!");
+}
+
+void btnCheck()
+{
+	static bool key_states[3];													// Tablica ze stanem przyciskow
+	static uint32_t key_time;													// Czas wcisniecia
+	uint8_t i2c_state = (pcf8575.read8() & 0xF8) ^ 0xF8;						// 5 najstarszych bitow
+
+	switch (i2c_state)
+	{
+		case BTN_RST:
+			key_states[0] = true;
+			key_time = millis();
+			break;
+
+		case BTN_UP:
+		case BTN_RT:
+			key_states[1] = true;
+			key_time = millis();
+			break;
+
+		case BTN_DN:
+		case BTN_LT:
+			key_states[2] = true;
+			key_time = millis();
+			break;
+
+		case BTN_RELEASED:
+			for (uint8_t key_id = 0; key_id < 3; key_id++)						// Przeszukaj tablice stanu przyciskow
+			{
+				if (key_states[key_id])
+				{
+					if ((millis() - key_time) < LONG_PRESS) keyShortPress((enum BUTTONS) key_id);	// Obsluz przycisk
+					else keyLongPress((enum BUTTONS) key_id);					// Obsluz przycisk
+
+					key_states[key_id] = false;									// Uaktualnij jego stan
+					break;
+				}
+			}
+
+			break;
+	}
+
+	pcf_signal = false;															// Przycisk obsluzony
+}
+
+void keyShortPress(enum BUTTONS button)
+{
+	debugI("Przycisk %d wcisniety krotko", button);
+/* 	switch (btn)
+	{
+		case BTN_RST:
+			Serial.println("Krotkie nacisniecie RST");
+
+			switch (screen)
+			{
+				case SCR_DIST:
+					if (conf.getInt("imp_src") == 1) gps_dist1 = 0;				// Skasuj dystans odcinka
+					else pulses_cnt1 = 0;
+
+					break;
+
+				case SCR_TIME:
+					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
+					{
+						if (timer_state == TMR_STOP)
+						{
+							timer_state = TMR_RUN;								// Uruchom stoper
+							current_time = 0;									// Wartosc poczatkowa
+						}
+						else
+						{
+							timer_state = TMR_STOP;								// Zatrzymaj stoper
+							save_time();										// Zanotuj miedzyczas
+							current_time = 0;									// Skasuj czas
+						}
+					}
+					else 														// W trybie menu
+					{
+						// obsluga kasowania miedzyczasow
+					}
+
+					break;
+
+				case SCR_NAVI:
+					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
+					{
+						if (conf.getInt("imp_src") == 1) gps_dist1 = 0;			// Skasuj dystans odcinka
+						else pulses_cnt1 = 0;
+					}
+					else 														// W trybie zmiany kontrolki
+					{
+						if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_TRK))			// Kontrolka "Zapisuj slad"
+						{
+							if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+							{
+								ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
+								// Zmien wyglad kontrolki
+								// Obsluga zapisu sladu do gpx
+							}
+							else 												// MSB = 1 (kontrolka aktywna)
+							{
+								ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
+								// Zmien wyglad kontrolki
+								// Zatrzymaj zapis sladu w gpx
+							}
+
+							return;
+						}
+
+						if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_WPT))			// Kontrolka "Zapisuj waypointy"
+						{
+							if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+							{
+								ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
+								// Zmien wyglad kontrolki
+								// Obsluga zapisu waypointow do gpx
+							}
+							else 												// MSB = 1 (kontrolka aktywna)
+							{
+								ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
+								// Zmien wyglad kontrolki
+								// Zatrzymaj zapis waypointow w gpx
+							}
+
+							return;
+						}
+
+						if (ctl_pos[SCR_NAVI] & (1 << NAVI_TO_WPT))				// Kontrolka "Nawiguj do waypointow"
+						{
+							if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+							{
+								ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
+								// Zmien wyglad kontrolki
+								// Obsluga nawigacji
+							}
+							else 												// MSB = 1 (kontrolka aktywna)
+							{
+								ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
+								// Zmien wyglad kontrolki
+								// Zatrzymaj nawigacje po waypointach
+							}
+
+							return;
+						}
+					}
+
+				case SCR_COMBO:
+					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
+					{
+						if (conf.getInt("imp_src") == 1) gps_dist1 = 0;			// Skasuj dystans odcinka
+						else pulses_cnt1 = 0;
+					}
+					else 														// W trybie zmiany kontrolki
+					{
+						if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_DIST))
+						{
+							if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+							{
+								ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
+								// Zmien wyglad kontrolki
+							}
+							else 												// MSB = 1 (kontrolka aktywna)
+							{
+								if (changed_dist_cal)
+								{
+									eeram_save16(DIST_CAL, calibrations.dist_cal);
+									// Pokaz komunikat
+								}
+
+								ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
+								// Zmien wyglad kontrolki
+							}
+
+							return;
+						}
+
+						if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_VOLT))
+						{
+							if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+							{
+								ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
+								// Zmien wyglad kontrolki
+							}
+							else 												// MSB = 1 (kontrolka aktywna)
+							{
+								if (changed_volt_cal)
+								{
+									eeram_save16(VOLT_CAL, calibrations.volt_cal);
+									// Pokaz komunikat
+								}
+
+								ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
+								// Zmien wyglad kontrolki
+							}
+
+							return;
+						}
+
+						if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_TEMP))
+						{
+							if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+							{
+								ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
+								// Zmien wyglad kontrolki
+							}
+							else 												// MSB = 1 (kontrolka aktywna)
+							{
+								if (changed_volt_cal)
+								{
+									eeram_save16(TEMP_CAL, calibrations.temp_cal);
+									// Pokaz komunikat
+								}
+
+								ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
+								// Zmien wyglad kontrolki
+							}
+
+							return;
+						}
+					}
+
+					break;
+
+				case SCR_GPS:
+					break;
+			}
+
+			break;
+
+		case BTN_UP:
+		case BTN_RT:
+			Serial.println("Krotkie nacisniecie UP lub RT");
+
+			if (btn_mode == CHG_SCR) next_scr();								// Nastepny ekran
+			else 																// Nastepna kontrolka
+			{
+				switch (screen)
+				{
+					case SCR_NAVI:
+						if (ctl_pos[SCR_NAVI] < 4) ctl_pos[SCR_NAVI] <<= 1;		// Poprzedni id przycisku
+						else ctl_pos[SCR_NAVI] = 1;								// lub od konca
+
+						break;
+
+					case SCR_COMBO:
+						if (ctl_pos[SCR_COMBO] < 4) ctl_pos[SCR_COMBO] <<= 1;	// Poprzedni id przycisku
+						else ctl_pos[SCR_COMBO] = 1;							// lub od konca
+
+						break;
+
+					default:
+						break;
+				}
+			}
+
+			break;
+
+		case BTN_DN:
+		case BTN_LT:
+			Serial.println("Krotkie nacisniecie DN lub LT");
+
+			if (btn_mode == CHG_SCR) prev_scr();								// Poprzedni ekran
+			else 																// Poprzednia kontrolka
+			{
+				// MSB - kontrolka aktywowana
+				// 0000.0100
+				// 0000.0010
+				// 0000.0001
+				switch (screen)
+				{
+					case SCR_NAVI:
+						if (ctl_pos[SCR_NAVI] > 1) ctl_pos[SCR_NAVI] >>= 1;		// Kolejny id przycisku
+						else ctl_pos[SCR_NAVI] = 4;								// lub od poczatku
+
+						break;
+
+					case SCR_COMBO:
+						if (ctl_pos[SCR_COMBO] > 1) ctl_pos[SCR_COMBO] >>= 1;	// Kolejny id przycisku
+						else ctl_pos[SCR_COMBO] = 4;							// lub od poczatku
+
+						break;
+
+					default:
+						break;
+				}
+			}
+
+			break;
+	}
+ */
+}
+
+void keyLongPress(enum BUTTONS button)
+{
+	debugI("Przycisk %d wcisniety DLUUUUGGOOOO", button);
+/* 	switch (btn)
+	{
+		case BTN_RST:
+			Serial.println("Dlugie nacisniecie RST");
+
+			switch (screen)
+			{
+				case SCR_DIST:
+				case SCR_NAVI:
+				case SCR_COMBO:
+					if (conf.getInt("imp_src") == 1) gps_dist2 = 0;				// Skasuj dystans odcinka
+					else pulses_cnt2 = 0;
+
+					break;
+
+				case SCR_TIME:
+				case SCR_GPS:
+					break;
+			}
+
+			break;
+
+		case BTN_UP:
+		case BTN_RT:
+		case BTN_DN:
+		case BTN_LT:
+			if (ctrl_list.size())												// Jezeli dla ekranu sa przyciski
+			{
+				if (btn_mode == CHG_SCR) btn_mode = CHG_CTRL;					// Zmien tryb zmiany ekranu/kontrolki
+				else btn_mode = CHG_SCR;
+			}
+
+			break;
+	}
+ */
+}
+
+void prevScr()
+{
+	// DIST
+	// TIME
+	// NAVI
+	// COMBO
+	// GPS
+	switch (screen)
+	{
+		case SCR_DIST:
+			if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+
+			break;
+
+		case SCR_TIME:
+			if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+
+			break;
+
+		case SCR_NAVI:
+			if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+
+			break;
+
+		case SCR_COMBO:
+			if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+
+			break;
+
+		case SCR_GPS:
+			if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+
+			break;
+	}
+
+	debugI("Aktualny ekran: %d", screen);
+	//open_screen(screen);
+}
+
+void nextScr()
+{
+	// DIST
+	// TIME
+	// NAVI
+	// COMBO
+	// GPS
+	switch (screen)
+	{
+		case SCR_DIST:
+			if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+
+			break;
+
+		case SCR_TIME:
+			if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+
+			break;
+
+		case SCR_NAVI:
+			if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+
+			break;
+
+		case SCR_COMBO:
+			if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+
+			break;
+
+		case SCR_GPS:
+			if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+
+			break;
+	}
+
+	debugI("Aktualny ekran: %d", screen);
+	//open_screen(screen);
+}
+/* 
+void open_screen(enum SCREENS scr)
+{
+	if (scr_close) scr_close();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)
+
+	screen = scr;																// Ustaw aktualny ekran
+	eeram.write(LAST_SCREEN, screen);											// Zapamietaj aktualny ekran
+	screen_t screen_buf;
+	memcpy_P(&screen_buf, &screen_data[screen], sizeof(screen_buf));			// Kopiuj opis z tabeli do bufora
+
+	if (screen_buf.scr_close_exe) scr_close = screen_buf.scr_close_exe;			// Jezeli jest funkcja zamkniecia ekranu, to ustaw wskaznik
+	else scr_close = NULL;
+
+	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
+	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
+
+	if (screen_buf.scr_open_exe) screen_buf.scr_open_exe();						// Uruchom funkcje skojarzona z otwarciem nowego ekranu
+
+	// Jezeli sa jakies przyciski, to utworz z nich liste
+	ctrl_list.clear();															// Wyczysc stara liste przyciskow
+
+	for (uint8_t btn = 0; btn < sizeof(ctrls_data) / sizeof(btn_t); btn++)		// Przejrzyj wszystkie przyciski we FLASH
+	{
+		memcpy_P(&key_buf, &ctrls_data[btn], sizeof(key_buf));					// Kopiowanie definicji przycisku z FLASH do RAM
+
+		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk jezeli nalezy do ekranu
+	}
 }
  */
