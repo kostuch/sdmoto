@@ -115,7 +115,7 @@ void loop()
 
 void bootstrap()
 {
-	if (((pcf8575.read8() & 0xF8) ^ 0xF8) == BTN_RST)							// Jezeli wcisniety przycisk RST
+	if (((pcf8575.read8() & 0xF8) ^ 0xF8) & (1 << BTN_RST))						// Jezeli wcisniety przycisk RST
 	{
 		Dir dir = SPIFFS.openDir("/");
 		SPIFFS_file = SPIFFS.open("/firmware.bin", "r");						// Otworz plik z SPIFFS
@@ -158,7 +158,7 @@ void everySecTask()
 		debugI("Data: %02d-%02d-%d %02d:%02d:%02d",
 		       gps.date.day(), gps.date.month(), gps.date.year(),
 		       gps.time.hour(), gps.time.minute(), gps.time.second());
-		debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
+		//debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
 	}
 }
 
@@ -832,41 +832,40 @@ void SD_list()
 
 void btnCheck()
 {
-	static bool key_states[3];													// Tablica ze stanem przyciskow
 	static uint32_t key_time;													// Czas wcisniecia
+	static uint8_t button_num, prev_button;
 	uint8_t i2c_state = (pcf8575.read8() & 0xF8) ^ 0xF8;						// 5 najstarszych bitow
 
-	switch (i2c_state)
+	for (size_t bin_num = 3; bin_num < 8; bin_num++)							// Bity 3-7
+	{
+		if (i2c_state & (1 << bin_num))											// Jezeli bit ustawiony
+		{
+			button_num = bin_num;												// Numer bitu przycisku
+			prev_button = button_num;											// Zapamietaj jaki to byl przycisk
+			break;																// Przerwij
+		}
+		button_num = BTN_RELEASED;
+	}
+
+	switch (button_num)
 	{
 		case BTN_RST:
-			key_states[0] = true;
 			key_time = millis();
 			break;
 
 		case BTN_UP:
 		case BTN_RT:
-			key_states[1] = true;
 			key_time = millis();
 			break;
 
 		case BTN_DN:
 		case BTN_LT:
-			key_states[2] = true;
 			key_time = millis();
 			break;
 
 		case BTN_RELEASED:
-			for (uint8_t key_id = 0; key_id < 3; key_id++)						// Przeszukaj tablice stanu przyciskow
-			{
-				if (key_states[key_id])
-				{
-					if ((millis() - key_time) < LONG_PRESS) keyShortPress((enum BUTTONS) key_id);	// Obsluz przycisk
-					else keyLongPress((enum BUTTONS) key_id);					// Obsluz przycisk
-
-					key_states[key_id] = false;									// Uaktualnij jego stan
-					break;
-				}
-			}
+			if ((millis() - key_time) < LONG_PRESS) keyShortPress((enum BUTTONS) prev_button);	// Obsluz przycisk
+			else keyLongPress((enum BUTTONS) prev_button);						// Obsluz przycisk
 
 			break;
 	}
@@ -876,12 +875,14 @@ void btnCheck()
 
 void keyShortPress(enum BUTTONS button)
 {
-	debugI("Przycisk %d wcisniety krotko", button);
-/* 	switch (btn)
-	{
-		case BTN_RST:
-			Serial.println("Krotkie nacisniecie RST");
+	debugI("Krotkie nacisniecie %d", button);
 
+	switch (button)
+	{
+		case BTN_RELEASED:
+			break;
+
+		case BTN_RST:
 			switch (screen)
 			{
 				case SCR_DIST:
@@ -901,7 +902,7 @@ void keyShortPress(enum BUTTONS button)
 						else
 						{
 							timer_state = TMR_STOP;								// Zatrzymaj stoper
-							save_time();										// Zanotuj miedzyczas
+							//save_time();										// Zanotuj miedzyczas
 							current_time = 0;									// Skasuj czas
 						}
 					}
@@ -920,59 +921,60 @@ void keyShortPress(enum BUTTONS button)
 					}
 					else 														// W trybie zmiany kontrolki
 					{
-						if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_TRK))			// Kontrolka "Zapisuj slad"
-						{
-							if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-							{
-								ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
-								// Zmien wyglad kontrolki
-								// Obsluga zapisu sladu do gpx
-							}
-							else 												// MSB = 1 (kontrolka aktywna)
-							{
-								ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
-								// Zmien wyglad kontrolki
-								// Zatrzymaj zapis sladu w gpx
-							}
+						/* 							if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_TRK))			// Kontrolka "Zapisuj slad"
+													{
+														if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+														{
+															ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
+															// Zmien wyglad kontrolki
+															// Obsluga zapisu sladu do gpx
+														}
+														else 												// MSB = 1 (kontrolka aktywna)
+														{
+															ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
+															// Zmien wyglad kontrolki
+															// Zatrzymaj zapis sladu w gpx
+														}
 
-							return;
-						}
+														return;
+													}
+						 */
+						/*							if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_WPT))			// Kontrolka "Zapisuj waypointy"
+													{
+														if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+														{
+															ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
+															// Zmien wyglad kontrolki
+															// Obsluga zapisu waypointow do gpx
+														}
+														else 												// MSB = 1 (kontrolka aktywna)
+														{
+															ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
+															// Zmien wyglad kontrolki
+															// Zatrzymaj zapis waypointow w gpx
+														}
 
-						if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_WPT))			// Kontrolka "Zapisuj waypointy"
-						{
-							if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-							{
-								ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
-								// Zmien wyglad kontrolki
-								// Obsluga zapisu waypointow do gpx
-							}
-							else 												// MSB = 1 (kontrolka aktywna)
-							{
-								ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
-								// Zmien wyglad kontrolki
-								// Zatrzymaj zapis waypointow w gpx
-							}
+														return;
+													}
+						 */
+						/* 							if (ctl_pos[SCR_NAVI] & (1 << NAVI_TO_WPT))				// Kontrolka "Nawiguj do waypointow"
+													{
+														if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+														{
+															ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
+															// Zmien wyglad kontrolki
+															// Obsluga nawigacji
+														}
+														else 												// MSB = 1 (kontrolka aktywna)
+														{
+															ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
+															// Zmien wyglad kontrolki
+															// Zatrzymaj nawigacje po waypointach
+														}
 
-							return;
-						}
-
-						if (ctl_pos[SCR_NAVI] & (1 << NAVI_TO_WPT))				// Kontrolka "Nawiguj do waypointow"
-						{
-							if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-							{
-								ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
-								// Zmien wyglad kontrolki
-								// Obsluga nawigacji
-							}
-							else 												// MSB = 1 (kontrolka aktywna)
-							{
-								ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
-								// Zmien wyglad kontrolki
-								// Zatrzymaj nawigacje po waypointach
-							}
-
-							return;
-						}
+														return;
+													}
+						 */
 					}
 
 				case SCR_COMBO:
@@ -983,71 +985,72 @@ void keyShortPress(enum BUTTONS button)
 					}
 					else 														// W trybie zmiany kontrolki
 					{
-						if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_DIST))
-						{
-							if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-							{
-								ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
-								// Zmien wyglad kontrolki
-							}
-							else 												// MSB = 1 (kontrolka aktywna)
-							{
-								if (changed_dist_cal)
-								{
-									eeram_save16(DIST_CAL, calibrations.dist_cal);
-									// Pokaz komunikat
-								}
+						/* 							if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_DIST))
+													{
+														if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+														{
+															ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
+															// Zmien wyglad kontrolki
+														}
+														else 												// MSB = 1 (kontrolka aktywna)
+														{
+															//if (changed_dist_cal)
+															{
+																eeram_save16(DIST_CAL, calibrations.dist_cal);
+																// Pokaz komunikat
+															}
 
-								ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
-								// Zmien wyglad kontrolki
-							}
+															ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
+															// Zmien wyglad kontrolki
+														}
 
-							return;
-						}
+														return;
+													}
+						 */
+						/* 							if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_VOLT))
+													{
+														if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+														{
+															ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
+															// Zmien wyglad kontrolki
+														}
+														else 												// MSB = 1 (kontrolka aktywna)
+														{
+															//if (changed_volt_cal)
+															{
+																eeram_save16(VOLT_CAL, calibrations.volt_cal);
+																// Pokaz komunikat
+															}
 
-						if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_VOLT))
-						{
-							if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-							{
-								ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
-								// Zmien wyglad kontrolki
-							}
-							else 												// MSB = 1 (kontrolka aktywna)
-							{
-								if (changed_volt_cal)
-								{
-									eeram_save16(VOLT_CAL, calibrations.volt_cal);
-									// Pokaz komunikat
-								}
+															ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
+															// Zmien wyglad kontrolki
+														}
 
-								ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
-								// Zmien wyglad kontrolki
-							}
+														return;
+													}
+						 */
+						/* 							if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_TEMP))
+													{
+														if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
+														{
+															ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
+															// Zmien wyglad kontrolki
+														}
+														else 												// MSB = 1 (kontrolka aktywna)
+														{
+															if (changed_volt_cal)
+															{
+																eeram_save16(TEMP_CAL, calibrations.temp_cal);
+																// Pokaz komunikat
+															}
 
-							return;
-						}
+															ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
+															// Zmien wyglad kontrolki
+														}
 
-						if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_TEMP))
-						{
-							if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-							{
-								ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
-								// Zmien wyglad kontrolki
-							}
-							else 												// MSB = 1 (kontrolka aktywna)
-							{
-								if (changed_volt_cal)
-								{
-									eeram_save16(TEMP_CAL, calibrations.temp_cal);
-									// Pokaz komunikat
-								}
-
-								ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
-								// Zmien wyglad kontrolki
-							}
-
-							return;
-						}
+														return;
+													}
+						 */
 					}
 
 					break;
@@ -1060,23 +1063,19 @@ void keyShortPress(enum BUTTONS button)
 
 		case BTN_UP:
 		case BTN_RT:
-			Serial.println("Krotkie nacisniecie UP lub RT");
-
-			if (btn_mode == CHG_SCR) next_scr();								// Nastepny ekran
+			if (btn_mode == CHG_SCR) nextScr();									// Nastepny ekran
 			else 																// Nastepna kontrolka
 			{
 				switch (screen)
 				{
 					case SCR_NAVI:
-						if (ctl_pos[SCR_NAVI] < 4) ctl_pos[SCR_NAVI] <<= 1;		// Poprzedni id przycisku
-						else ctl_pos[SCR_NAVI] = 1;								// lub od konca
-
+						//if (ctl_pos[SCR_NAVI] < 4) ctl_pos[SCR_NAVI] <<= 1;		// Poprzedni id przycisku
+						//else ctl_pos[SCR_NAVI] = 1;								// lub od konca
 						break;
 
 					case SCR_COMBO:
-						if (ctl_pos[SCR_COMBO] < 4) ctl_pos[SCR_COMBO] <<= 1;	// Poprzedni id przycisku
-						else ctl_pos[SCR_COMBO] = 1;							// lub od konca
-
+						//if (ctl_pos[SCR_COMBO] < 4) ctl_pos[SCR_COMBO] <<= 1;	// Poprzedni id przycisku
+						//else ctl_pos[SCR_COMBO] = 1;							// lub od konca
 						break;
 
 					default:
@@ -1088,9 +1087,7 @@ void keyShortPress(enum BUTTONS button)
 
 		case BTN_DN:
 		case BTN_LT:
-			Serial.println("Krotkie nacisniecie DN lub LT");
-
-			if (btn_mode == CHG_SCR) prev_scr();								// Poprzedni ekran
+			if (btn_mode == CHG_SCR) prevScr();									// Poprzedni ekran
 			else 																// Poprzednia kontrolka
 			{
 				// MSB - kontrolka aktywowana
@@ -1100,15 +1097,13 @@ void keyShortPress(enum BUTTONS button)
 				switch (screen)
 				{
 					case SCR_NAVI:
-						if (ctl_pos[SCR_NAVI] > 1) ctl_pos[SCR_NAVI] >>= 1;		// Kolejny id przycisku
-						else ctl_pos[SCR_NAVI] = 4;								// lub od poczatku
-
+						//if (ctl_pos[SCR_NAVI] > 1) ctl_pos[SCR_NAVI] >>= 1;		// Kolejny id przycisku
+						//else ctl_pos[SCR_NAVI] = 4;								// lub od poczatku
 						break;
 
 					case SCR_COMBO:
-						if (ctl_pos[SCR_COMBO] > 1) ctl_pos[SCR_COMBO] >>= 1;	// Kolejny id przycisku
-						else ctl_pos[SCR_COMBO] = 4;							// lub od poczatku
-
+						//if (ctl_pos[SCR_COMBO] > 1) ctl_pos[SCR_COMBO] >>= 1;	// Kolejny id przycisku
+						//else ctl_pos[SCR_COMBO] = 4;							// lub od poczatku
 						break;
 
 					default:
@@ -1118,17 +1113,18 @@ void keyShortPress(enum BUTTONS button)
 
 			break;
 	}
- */
 }
 
 void keyLongPress(enum BUTTONS button)
 {
-	debugI("Przycisk %d wcisniety DLUUUUGGOOOO", button);
-/* 	switch (btn)
-	{
-		case BTN_RST:
-			Serial.println("Dlugie nacisniecie RST");
+	debugI("DLUGIE nacisniecie %d", button);
 
+	switch (button)
+	{
+		case BTN_RELEASED:
+			break;
+
+		case BTN_RST:
 			switch (screen)
 			{
 				case SCR_DIST:
@@ -1136,7 +1132,6 @@ void keyLongPress(enum BUTTONS button)
 				case SCR_COMBO:
 					if (conf.getInt("imp_src") == 1) gps_dist2 = 0;				// Skasuj dystans odcinka
 					else pulses_cnt2 = 0;
-
 					break;
 
 				case SCR_TIME:
@@ -1150,15 +1145,14 @@ void keyLongPress(enum BUTTONS button)
 		case BTN_RT:
 		case BTN_DN:
 		case BTN_LT:
-			if (ctrl_list.size())												// Jezeli dla ekranu sa przyciski
+			/* if (ctrl_list.size())												// Jezeli dla ekranu sa przyciski
 			{
 				if (btn_mode == CHG_SCR) btn_mode = CHG_CTRL;					// Zmien tryb zmiany ekranu/kontrolki
 				else btn_mode = CHG_SCR;
 			}
-
+			*/
 			break;
 	}
- */
 }
 
 void prevScr()
@@ -1268,7 +1262,7 @@ void nextScr()
 	debugI("Aktualny ekran: %d", screen);
 	//open_screen(screen);
 }
-/* 
+/*
 void open_screen(enum SCREENS scr)
 {
 	if (scr_close) scr_close();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)

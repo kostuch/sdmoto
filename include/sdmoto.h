@@ -35,7 +35,7 @@
 #define LONG_PRESS	500															// Czas dlugiego wcisniecia [ms]
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
-enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 128, BTN_UP = 32, BTN_DN = 64, BTN_LT = 16, BTN_RT = 8};
+enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
 enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEMORY, SD_OK, SD_NOOK, SD_OFF};
 enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS};			// Ekrany
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
@@ -53,6 +53,8 @@ enum SCREENS screen;															// Wyswietlany ekran
 enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
+uint32_t current_time;
+uint32_t pulses_cnt1, pulses_cnt2, gps_dist1, gps_dist2;
 
 void welcomeScreen(void);
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
