@@ -53,7 +53,6 @@ enum SCREENS screen;															// Wyswietlany ekran
 enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
-uint32_t current_time;
 uint32_t pulses_cnt1, pulses_cnt2, gps_dist1, gps_dist2;
 
 void welcomeScreen(void);
@@ -70,6 +69,7 @@ void keyLongPress(enum BUTTONS button);
 void prevScr(void);
 void nextScr(void);
 void openScr(enum SCREENS screen);
+void (*closeScr)(void);
 void eeram_save16(int16_t addr, uint16_t val);
 void eeram_save32(int16_t addr, uint32_t val);
 void setupPins(void);															// Ustawienie pinow GPIO
@@ -127,9 +127,6 @@ float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniec
 
 void save_device_config(void);
 void save_config_cb(void);
-void prev_scr(void);
-void next_scr(void);
-void (*scr_close)(void);
 void mux_switch(enum MUX_STATES state);
 void read_distances(void);
 void render_toolbar(enum TOOLBAR_ITEMS item);

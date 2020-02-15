@@ -18,6 +18,7 @@
 #include <SerialRAM.h>															// EERAM
 #include "TinyGPS++.h"
 #include "sdmoto.h"																// Konfiguracja kompilacji
+#include "gui.h"																// Definicje GUI
 
 Ticker				every_sec_tmr;												// Timer sekundowy
 RemoteDebug			Debug;														// Zdalny debug
@@ -37,6 +38,7 @@ WiFiEventHandler	SAPstationDisconnectedHandler;
 WiFiEventHandler	STAstationGotIPHandler;
 WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
+SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
 
 #define SD_CS_PIN 0 															// Fake value dla SdFat
 #define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI)							// Magia dla SdFat
@@ -90,6 +92,7 @@ void setup()
 	Debug.setResetCmdEnabled(true);												// Reset dozwolony
 	Debug.showProfiler(true);													// Profiler (pomiar czsasu)
 	Debug.showColors(true);														// Kolorki
+	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	Serial.println("Koniec SETUP!");
 }
@@ -153,13 +156,14 @@ void everySecTask()
 
 	//uint16_t pomiar = analogRead(A0);
 	//debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
-	if (gps.date.isUpdated())
+	/* if (gps.date.isUpdated())
 	{
 		debugI("Data: %02d-%02d-%d %02d:%02d:%02d",
 		       gps.date.day(), gps.date.month(), gps.date.year(),
 		       gps.time.hour(), gps.time.minute(), gps.time.second());
-		//debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
+		debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
 	}
+ */
 }
 
 void setupPins()
@@ -1204,9 +1208,7 @@ void prevScr()
 
 			break;
 	}
-
-	debugI("Aktualny ekran: %d", screen);
-	//open_screen(screen);
+	openScr(screen);
 }
 
 void nextScr()
@@ -1258,36 +1260,42 @@ void nextScr()
 
 			break;
 	}
-
-	debugI("Aktualny ekran: %d", screen);
-	//open_screen(screen);
+	openScr(screen);
 }
-/*
-void open_screen(enum SCREENS scr)
-{
-	if (scr_close) scr_close();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)
 
-	screen = scr;																// Ustaw aktualny ekran
+void openScr(enum SCREENS scr)
+{
+	if (closeScr) closeScr();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)
+
 	eeram.write(LAST_SCREEN, screen);											// Zapamietaj aktualny ekran
 	screen_t screen_buf;
 	memcpy_P(&screen_buf, &screen_data[screen], sizeof(screen_buf));			// Kopiuj opis z tabeli do bufora
 
-	if (screen_buf.scr_close_exe) scr_close = screen_buf.scr_close_exe;			// Jezeli jest funkcja zamkniecia ekranu, to ustaw wskaznik
-	else scr_close = NULL;
+	if (screen_buf.scr_close_exe) closeScr = screen_buf.scr_close_exe;			// Jezeli jest funkcja zamkniecia ekranu, to ustaw wskaznik
+	else closeScr = NULL;
 
-	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
-	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
+	//tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
+	//tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
 
 	if (screen_buf.scr_open_exe) screen_buf.scr_open_exe();						// Uruchom funkcje skojarzona z otwarciem nowego ekranu
 
-	// Jezeli sa jakies przyciski, to utworz z nich liste
 	ctrl_list.clear();															// Wyczysc stara liste przyciskow
-
+	// Jezeli sa jakies przyciski, to utworz z nich liste
 	for (uint8_t btn = 0; btn < sizeof(ctrls_data) / sizeof(btn_t); btn++)		// Przejrzyj wszystkie przyciski we FLASH
 	{
 		memcpy_P(&key_buf, &ctrls_data[btn], sizeof(key_buf));					// Kopiowanie definicji przycisku z FLASH do RAM
 
-		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk jezeli nalezy do ekranu
+		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk do listy jezeli nalezy do ekranu
 	}
-}
+
+	debugI("Ekran: %d Przyciskow: %d", scr, ctrl_list.size());
+
+/* 	// DEBUG
+	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+	debugI("Lista: %d", ctrl_list.size());
+
+	for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)
+		debugI("Scr: %d Key_id: %d Label: %s", idx->screen_id, idx->key_id, idx->lbl);
+	//
  */
+}
