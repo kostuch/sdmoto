@@ -53,7 +53,8 @@ enum SCREENS screen;															// Wyswietlany ekran
 enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
-uint32_t pulses_cnt1, pulses_cnt2, gps_dist1, gps_dist2;
+volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow										
+uint32_t gps_dist1, gps_dist2;													// Dystanse (dla GPS)
 
 void welcomeScreen(void);
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
@@ -68,8 +69,10 @@ void keyShortPress(enum BUTTONS button);
 void keyLongPress(enum BUTTONS button);
 void prevScr(void);
 void nextScr(void);
-void openScr(enum SCREENS screen);
+void openScr(enum SCREENS scr);
 void (*closeScr)(void);
+void renderToolbar(enum TOOLBAR_ITEMS item);
+void renderScreen(enum SCREENS scr);
 void eeram_save16(int16_t addr, uint16_t val);
 void eeram_save32(int16_t addr, uint32_t val);
 void setupPins(void);															// Ustawienie pinow GPIO
@@ -119,26 +122,13 @@ typedef struct
 cal_t calibrations;
 bool changed_volt_cal;
 bool changed_temp_cal;
-volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki dystansow i predkosci (nie dla GPS!)
-uint32_t gps_dist1, gps_dist2;													// Dystanse z GPS
-uint32_t imp_dist1, imp_dist2, dist4speed;										// Dystanse z impulsatora
 uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie
 float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniecie)																				// Najstarszy bit ustawiony, jezeli kontrolka aktywna
 
 void save_device_config(void);
 void save_config_cb(void);
-void mux_switch(enum MUX_STATES state);
 void read_distances(void);
-void render_toolbar(enum TOOLBAR_ITEMS item);
-void open_screen(enum SCREENS scr);
-void key_long_press(enum BUTTONS btn);
-void key_short_press(enum BUTTONS btn);
 void save_time(void);
-void btn_dist_cal(void);
-void btn_rm_times(void);
-void btn_save_trk(void);
-void btn_save_wpt(void);
-void btn_nav2wpt(void);
 void volt_cal_up(void);
 void volt_cal_dn(void);
 void update_compass(uint16_t course);

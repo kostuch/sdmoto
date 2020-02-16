@@ -25,7 +25,6 @@ RemoteDebug			Debug;														// Zdalny debug
 PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
 SerialRAM			eeram;														// EERAM
 TFT_eSPI 			tft = TFT_eSPI();											// Wyswietlacz TFT
-//Adafruit_GPS		gps(&Serial);												// GPS
 TinyGPSPlus			gps;
 SdFat				sd;															// Karta SD
 File				dir;														// Katalog na SD
@@ -83,6 +82,7 @@ void setup()
 	readConf();																	// Odczyt konfiguracji urzadzenia
 	startWebServer();															// Start Serwera web
 	tft.init(NULL, tft_cs, NULL, NULL);											// Init TFT (DC, CS, RST, TCS, CS via driver)
+	analogWrite(BL_PIN, pwm_val);												// DEBUG
 	tft.setRotation(1);
 	tft.fillScreen(TFT_BLACK);
 	tft.drawCentreString("Test ST7735!", tft.width() / 2, tft.height() / 2, 2);
@@ -93,6 +93,11 @@ void setup()
 	Debug.showProfiler(true);													// Profiler (pomiar czsasu)
 	Debug.showColors(true);														// Kolorki
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
+	renderToolbar(WIFI_XOFF);													// Ikona WiFi
+	renderToolbar(GPS_NOFIX);													// Ikona GPS
+	renderToolbar(MEMORY);														// Ikona pamieci
+	renderToolbar(GPS_DATETIME);												// Czas
+	openScr(screen);															// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	Serial.println("Koniec SETUP!");
 }
@@ -149,21 +154,19 @@ void bootstrap()
 
 void everySecTask()
 {
-	analogWrite(BL_PIN, pwm_val);												// DEBUG
+	//analogWrite(BL_PIN, pwm_val);												// DEBUG
 
-	if (pwm_val < 1023) pwm_val += 200;
-	else pwm_val = 0;
+	//if (pwm_val < 1023) pwm_val += 200;
+	//else pwm_val = 0;
 
 	//uint16_t pomiar = analogRead(A0);
 	//debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
-	/* if (gps.date.isUpdated())
+	if (gps.date.isUpdated())
 	{
-		debugI("Data: %02d-%02d-%d %02d:%02d:%02d",
-		       gps.date.day(), gps.date.month(), gps.date.year(),
-		       gps.time.hour(), gps.time.minute(), gps.time.second());
-		debugI("Lat: %f Lon: %f", gps.location.lat(), gps.location.lng());
+		tft.setCursor(TBARX_DATETIME, 0);
+		tft.setTextColor(TFT_GREEN);
+		tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
 	}
- */
 }
 
 void setupPins()
@@ -180,6 +183,9 @@ void setupPins()
 
 ICACHE_RAM_ATTR void imp_irq(void)
 {
+	pulses_cnt1++;																// Zwieksz liczniki impulsow
+	pulses_cnt2++;
+	pulses_spd++;																// Impulsy do pomiaru predosci
 	imp_signal = true;															// Flaga pojawienia sie impulsu
 	detachInterrupt(IMP_IRQ_PIN);												// Odepnij przerwania, bo inaczej CRASH
 }
@@ -1274,9 +1280,6 @@ void openScr(enum SCREENS scr)
 	if (screen_buf.scr_close_exe) closeScr = screen_buf.scr_close_exe;			// Jezeli jest funkcja zamkniecia ekranu, to ustaw wskaznik
 	else closeScr = NULL;
 
-	//tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
-	//tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
-
 	if (screen_buf.scr_open_exe) screen_buf.scr_open_exe();						// Uruchom funkcje skojarzona z otwarciem nowego ekranu
 
 	ctrl_list.clear();															// Wyczysc stara liste przyciskow
@@ -1288,8 +1291,7 @@ void openScr(enum SCREENS scr)
 		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk do listy jezeli nalezy do ekranu
 	}
 
-	debugI("Ekran: %d Przyciskow: %d", scr, ctrl_list.size());
-
+	renderScreen(screen);
 /* 	// DEBUG
 	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
 	debugI("Lista: %d", ctrl_list.size());
@@ -1298,4 +1300,56 @@ void openScr(enum SCREENS scr)
 		debugI("Scr: %d Key_id: %d Label: %s", idx->screen_id, idx->key_id, idx->lbl);
 	//
  */
+}
+
+void renderScreen(enum SCREENS scr)
+{
+	debugI("Ekran: %d Przyciskow: %d", scr, ctrl_list.size());
+	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
+	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
+	tft.setTextColor(TFT_WHITE);
+	tft.drawCentreString("Ekran " + String(screen), tft.width() / 2, tft.height() / 2, 2);
+}
+
+void renderToolbar(enum TOOLBAR_ITEMS item)
+{
+	switch (item)
+	{
+		case WIFI_XOFF:
+			break;
+
+		case WIFI_XAP:
+			break;
+
+		case WIFI_XSTA:
+			break;
+
+		case GPS_DATETIME:
+			if (gps.location.isValid()) tft.setTextColor(TFT_BLACK);// Wyswietl czas w kontrascie
+			else tft.setTextColor(TFT_LIGHTGREY);// Wyswietl czas na szaro
+
+			tft.setCursor(TBARX_DATETIME, 0);
+			tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
+			break;
+
+		case GPS_FIX:
+			//tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, ILI9341_GREEN, ILI9341_LIGHTGREY);
+			break;
+
+		case GPS_NOFIX:
+			//tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, ILI9341_RED, ILI9341_LIGHTGREY);
+			break;
+
+		case MEMORY:
+			break;
+
+		case SD_OK:
+			break;
+
+		case SD_NOOK:
+			break;
+
+		case SD_OFF:
+			break;
+	}
 }

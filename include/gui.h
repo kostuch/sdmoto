@@ -57,4 +57,6 @@ const screen_t screen_data[] PROGMEM =
 	{4, (char *) "GPS", openGPS, NULL}											// GPS
 };
 
+void renderScreen(void);
+
 #endif /* GUI_H_ */
