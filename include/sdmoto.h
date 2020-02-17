@@ -32,12 +32,14 @@
 #define DIST_CAL	(LAST_WPT + 2)												// Kalibracja dystansu
 #define VOLT_CAL	(DIST_CAL + 2)												// Kalibracja napiecia
 #define TEMP_CAL	(VOLT_CAL + 2)												// Kalibracja temperatury
+
 #define LONG_PRESS	500															// Czas dlugiego wcisniecia [ms]
+#define AP_TIMEOUT	10															// Czas na polaczenie z Access Pointem
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
-enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEMORY, SD_OK, SD_NOOK, SD_OFF};
-enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS};			// Ekrany
+enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEM_FREE, MEM_AVG, MEM_FULL, SD_OK, SD_NOOK, SD_OFF};
+enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE, SCR_WELCOME};	// Ekrany
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
@@ -46,6 +48,8 @@ const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA 
 bool connected;																	// Flaga WiFi
 bool internet;																	// Flaga dostepu do Internetu
 bool bit_state;																	// DEBUG
+bool even_odd;																	// Parzysta/nieparzysta sekunda
+bool fix;																		// FIX GPS
 volatile bool pcf_signal;														// Flaga przerwania z expandera
 volatile bool imp_signal;														// Flaga przerwania z impulsu
 enum MUX_STATES mux_state;														// Stan multipleksera
@@ -53,10 +57,11 @@ enum SCREENS screen;															// Wyswietlany ekran
 enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
-volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow										
+volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow
 uint32_t gps_dist1, gps_dist2;													// Dystanse (dla GPS)
+int fw_upd_progress;															// Postep upgrade
+//uint8_t spiffs_usage;															// Zajetosc SPIFFS
 
-void welcomeScreen(void);
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
 void everySecTask(void);
 void mux_switch(enum MUX_STATES state);
@@ -79,6 +84,7 @@ void setupPins(void);															// Ustawienie pinow GPIO
 void readConf(void);															// Odczyt konfiguracji urzadzenia
 void startWebServer(void);														// Web server
 void initWiFi(void);															// Inicjalizacja WiFi
+void initWiFiStaAp(void);														// Wlaczenie Station albo AccesPoint
 void handleRoot(void);
 void handleConf(void);
 void handleLogin(void);

@@ -33,36 +33,28 @@ File				file;														// Plik na SD
 ESP8266WebServer	web_server;													// Web server
 WebConfig			conf;														// Konfigurator webowy
 fs::File			SPIFFS_file;												// Plik na SPIFFS
+ESP8266WiFiMulti	wifi_multi;													// WiFi
 WiFiEventHandler	SAPstationConnectedHandler;
 WiFiEventHandler	SAPstationDisconnectedHandler;
 WiFiEventHandler	STAstationGotIPHandler;
 WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
+uint16_t pwm_val = 0;
+uint16_t kalibracja = 100;
 
 #define SD_CS_PIN 0 															// Fake value dla SdFat
 #define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI)							// Magia dla SdFat
 
-void sdCsInit(SdCsPin_t pin)
-{}																				// Inicjalizacja CS (Puste!)
+void sdCsInit(SdCsPin_t pin) {}													// Inicjalizacja CS (Puste!)
 
-void sdCsWrite(SdCsPin_t pin, bool level)
+void debugInit(void)
 {
-	pcf8575.write(SDC_CS_PIN, level);											// CS dla SDCard
-}
-
-void tft_cs(bool enabled)
-{
-	pcf8575.write(TFT_CS_PIN, !enabled);										// CS dla TFT
-}
-
-uint16_t pwm_val = 0;
-uint16_t kalibracja = 100;
-
-void mux_switch(enum MUX_STATES state)
-{
-	pcf8575.write(MUX_PIN, state);
-	mux_state = state;
+	// ------------------------- Remote debug
+	Debug.begin(conf.getApName());												// Init socketa
+	Debug.setResetCmdEnabled(true);												// Reset dozwolony
+	Debug.showProfiler(true);													// Profiler (pomiar czsasu)
+	Debug.showColors(true);														// Kolorki
 }
 
 void setup()
@@ -81,25 +73,21 @@ void setup()
 	if (!sd.begin(SD_CONFIG)) Serial.println("Karta SD sie zesrala.");			// Init SDCard
 
 	readConf();																	// Odczyt konfiguracji urzadzenia
-	startWebServer();															// Start Serwera web
+	initWiFi();
+	//startWebServer();															// Start Serwera web
 	tft.init(NULL, tft_cs, NULL, NULL);											// Init TFT (DC, CS, RST, TCS, CS via driver)
 	//tft.setSwapBytes(true);
 	analogWrite(BL_PIN, pwm_val);												// DEBUG
-	tft.setRotation(1);
+	tft.setRotation(1);															// Landscape
 	tft.fillScreen(TFT_BLACK);
-	tft.drawCentreString("Test ST7735!", tft.width() / 2, tft.height() / 2, 2);
-	tft.drawCentreString(String(millis()), tft.width() / 2, tft.height() / 4, 2);
-	// ------------------------- Remote debug
-	Debug.begin(conf.getApName());												// Init socketa
-	Debug.setResetCmdEnabled(true);												// Reset dozwolony
-	Debug.showProfiler(true);													// Profiler (pomiar czsasu)
-	Debug.showColors(true);														// Kolorki
-	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	renderToolbar(WIFI_XOFF);													// Ikona WiFi
 	renderToolbar(GPS_NOFIX);													// Ikona GPS
-	//renderToolbar(MEMORY);														// Ikona pamieci
-	renderToolbar(SD_OK);														// Ikona karty SD
+	SPIFFS_list();																// Ikona pamieci wg zajetosci
+	renderToolbar(SD_OFF);														// Ikona karty SD
 	renderToolbar(GPS_DATETIME);												// Czas
+	renderScreen(SCR_WELCOME);													// Pokaz wizytowke
+	delay(2000);																// Chwila...
+	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	openScr(screen);															// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	Serial.println("Koniec SETUP!");
@@ -107,6 +95,8 @@ void setup()
 
 void loop()
 {
+	static uint32_t second;
+
 	if (pcf_signal) btnCheck();													// Okresl stan przyciskow
 
 	if (imp_signal)
@@ -117,11 +107,20 @@ void loop()
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
 
+	if (!connected)																// Jezeli nie ma WiFi
+	{
+		if ((millis() - second) > 1000)											// Co sekunde
+		{
+			initWiFiStaAp();													// Probuj
+			second = millis();													// Uaktualnij zmienna
+		}
+	}
+
 	if (connected) web_server.handleClient();									// Obsluga Web serwera
 
 	while (Serial.available()) gps.encode(Serial.read());						// Obsluga transmisji NMEA z GPS
 
-	Debug.handle();																// Obsluga Remote Debug
+	if (connected) Debug.handle();												// Obsluga Remote Debug
 }
 
 void bootstrap()
@@ -155,8 +154,25 @@ void bootstrap()
 	}
 }
 
+void sdCsWrite(SdCsPin_t pin, bool level)
+{
+	pcf8575.write(SDC_CS_PIN, level);											// CS dla SDCard
+}
+
+void tft_cs(bool enabled)
+{
+	pcf8575.write(TFT_CS_PIN, !enabled);										// CS dla TFT
+}
+
+void mux_switch(enum MUX_STATES state)
+{
+	pcf8575.write(MUX_PIN, state);
+	mux_state = state;
+}
+
 void everySecTask()
 {
+	even_odd ^= 1;																// Co sekunde zmien flage
 	//analogWrite(BL_PIN, pwm_val);												// DEBUG
 
 	//if (pwm_val < 1023) pwm_val += 200;
@@ -164,13 +180,24 @@ void everySecTask()
 
 	//uint16_t pomiar = analogRead(A0);
 	//debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
-	if (gps.date.isUpdated())
+
+	if (gps.date.isUpdated()) renderToolbar(GPS_DATETIME);						// Jezeli nowy czas z GPS
+
+	if (gps.location.isValid() && (gps.location.age() < 2000))					// Jezeli swierza lokalizacja
 	{
-		tft.fillRect(TBARX_DATETIME, 0, 64, 8, TFT_BLACK);
-		tft.setTextColor(TFT_GREEN);
-		String x = String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second());
-		tft.drawString(x, TBARX_DATETIME, 0, 1);
-		//tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
+		if (!fix)
+		{
+			renderToolbar(GPS_FIX);												// Jezeli go nie bylo, to przerysuj ikone
+			fix = true;																// To jest FIX
+		}
+	}
+	else
+	{
+		if (fix)
+		{
+			renderToolbar(GPS_NOFIX);											// Jezeli byl, to przerysuj ikone
+			fix = false;
+		}
 	}
 }
 
@@ -223,20 +250,36 @@ void readConf()
 	            "'default':'SDMoto18'"
 	            "},"
 	            "{"
-	            "'name':'ssid',"
+	            "'name':'ssid1',"
 	            "'label':'Nazwa sieci WiFi',"
 	            "'type':");
 	params += String(INPUTTEXT);
 	params += F(","
-	            "'default':'Moje WiFi'"
+	            "'default':'SSID1'"
 	            "},"
 	            "{"
-	            "'name':'pwd',"
+	            "'name':'pwd1',"
 	            "'label':'Hasło WiFi',"
 	            "'type':");
 	params += String(INPUTPASSWORD);
 	params += F(","
-	            "'default':'moje_tajne_haslo'"
+	            "'default':'moje_haslo_1'"
+	            "},"
+	            "{"
+	            "'name':'ssid2',"
+	            "'label':'Nazwa sieci WiFi',"
+	            "'type':");
+	params += String(INPUTTEXT);
+	params += F(","
+	            "'default':'SSID2'"
+	            "},"
+	            "{"
+	            "'name':'pwd2',"
+	            "'label':'Hasło WiFi',"
+	            "'type':");
+	params += String(INPUTPASSWORD);
+	params += F(","
+	            "'default':'moje_haslo_2'"
 	            "},"
 	            "{"
 	            "'name':'imp_src',"
@@ -387,8 +430,13 @@ String SPIFFS_list()
 {
 	fs::FSInfo fs_info;
 	SPIFFS.info(fs_info);
-	int32_t free_space = (fs_info.totalBytes - fs_info.usedBytes) / 1024;
-	//String FileList = F("File List:\n");
+	int32_t free_space = (fs_info.totalBytes - fs_info.usedBytes) / 1024;		// Kilobajty
+	uint8_t spiffs_usage = (fs_info.usedBytes * 100) / fs_info.totalBytes;		// Procent zajetosci SPIFFS
+
+	if (spiffs_usage < 50)	renderToolbar(MEM_FREE);							// Ikona pamieci
+	else if (spiffs_usage < 80) renderToolbar(MEM_AVG);
+	else renderToolbar(MEM_FULL);
+
 	fs::Dir dir = SPIFFS.openDir("/");
 	String page = HTMLHeader();
 	page += F("<h3>Dostępne w pamięci pliki</h3>\n");
@@ -464,10 +512,17 @@ void onWiFiModeChanged(const WiFiEventModeChange &evt)
 
 void onStationGotIP(const WiFiEventStationModeGotIP &evt)
 {
-	Serial.print(F("Net = "));
+	/* renderToolbar(WIFI_XSTA);													// Aktualizuj ikone na pasku
+	connected = true;															// Flaga polaczenia
+	internet = true;															// Flaga dostepu do internetu
+	WiFi.hostname(conf.getApName());											// Nazwa hosta (kosmetyka)
+	startWebServer();															// Wystartuj Serwer www
+	Serial.println(F("Serwer www RUN at STA:"));
 	Serial.println(evt.ip);
 	Serial.println(evt.mask);
 	Serial.println(evt.gw);
+	debugInit();
+	*/
 }
 
 void onClientDisconnected(const WiFiEventStationModeDisconnected &evt)
@@ -484,39 +539,47 @@ void initWiFi()
 	STAstationGotIPHandler = WiFi.onStationModeGotIP(&onStationGotIP);
 	STAstationDisconnectedHandler = WiFi.onStationModeDisconnected(&onClientDisconnected);
 	wifiModeChanged = WiFi.onWiFiModeChange(&onWiFiModeChanged);
-	WiFi.persistent(false);														 // Don't save WiFi configuration in flash - optional
-	ESP8266WiFiMulti wifi_multi;
-	WiFi.mode(WIFI_STA);
-	wifi_multi.addAP(conf.getValue("ssid"), conf.getValue("pwd"));
-	uint8_t cnt = 0;
+	WiFi.persistent(false);														// Nie zapisuj konfiga WiFi we FLASH
+	WiFi.mode(WIFI_STA);														// Tryb STATION
+	wifi_multi.addAP(conf.getValue("ssid1"), conf.getValue("pwd1"));			// Dodaj pierwsza siec
+	wifi_multi.addAP(conf.getValue("ssid2"), conf.getValue("pwd2"));			// Dodaj druga siec
+}
 
-	while ((wifi_multi.run() != WL_CONNECTED) && (cnt < 20))
+void initWiFiStaAp()
+{
+	static uint8_t ap_time;
+
+	if (wifi_multi.run() != WL_CONNECTED)
 	{
-		delay(500);
-		Serial.print(".");
-		cnt++;
-	}
-
-	Serial.println();
-
-	if (wifi_multi.run() == WL_CONNECTED)
-	{
-		internet = true;
-		WiFi.hostname(conf.getApName());
+		if (ap_time++ > AP_TIMEOUT)
+		{
+			IPAddress local_IP(10, 0, 0, 1);
+			IPAddress gateway(10, 0, 0, 1);
+			IPAddress subnet(255, 0, 0, 0);
+			WiFi.softAPConfig(local_IP, gateway, subnet);
+			//WiFi.mode(WIFI_AP);//192.168.4.1
+			WiFi.softAP(conf.getApName(), conf.getValue("dev_pwd"));			// Ustaw tryb Access Pointa
+			connected = true;													// Ustaw flage
+			internet = false;
+			renderToolbar(WIFI_XAP);											// Aktualizuj ikone na toolbarze
+			startWebServer();													// Wystartuj Serwer www
+			debugInit();
+			//Serial.println(F("Serwer www RUN at AP IP:"));
+			//Serial.println(conf.getApName());
+			//Serial.println(WiFi.softAPIP());
+		}
 	}
 	else
 	{
-		IPAddress local_IP(10, 0, 0, 1);
-		IPAddress gateway(10, 0, 0, 1);
-		IPAddress subnet(255, 0, 0, 0);
-		WiFi.softAPConfig(local_IP, gateway, subnet);
-		//WiFi.mode(WIFI_AP);//192.168.4.1
-		WiFi.softAP(conf.getApName(), conf.getValue("dev_pwd"));
-		Serial.println(conf.getApName());
-		Serial.println(WiFi.softAPIP());
+		connected = true;															// Flaga polaczenia
+		internet = true;															// Flaga dostepu do internetu
+		renderToolbar(WIFI_XSTA);													// Aktualizuj ikone na pasku
+		WiFi.hostname(conf.getApName());											// Nazwa hosta (kosmetyka)
+		startWebServer();															// Wystartuj Serwer www
+		debugInit();
+		//Serial.print(F("Serwer www RUN at Sta IP:"));
+		//Serial.println(WiFi.localIP());
 	}
-
-	connected = true;
 }
 
 void update_started(void)
@@ -533,12 +596,16 @@ void update_finished(void)
 
 void update_progress(int cur, int total)
 {
-	Serial.printf_P(PSTR("HTTP update process at %d of %d bytes...\r"), cur, total);
+	//Serial.printf_P(PSTR("HTTP update process at %d of %d\r"), cur, total);
+	fw_upd_progress = (cur * 100) / total;										// Procent postepu aktualizacji
+	renderScreen(SCR_UPDATE);
 }
 
 void update_error(int err)
 {
 	Serial.printf_P(PSTR("HTTP update fatal error code %d\n"), err);
+	fw_upd_progress = err;
+	//renderScreen(SCR_UPDATE);
 }
 
 void handleFWUpdate()
@@ -668,7 +735,7 @@ void handleLogin2()
 }
 void startWebServer()
 {
-	initWiFi();
+	//initWiFi();
 	web_server.onFileUpload(handleFileUpload);
 	web_server.on(F("/"), handleRoot);
 	web_server.on(F("/update"), handleFWUpdate);
@@ -811,17 +878,6 @@ bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap
 	// Return 1 to decode next block
 	return 1;
 }
-
-/* void welcomeScreen()
-{
-	TJpgDec.setJpgScale(1);
-	TJpgDec.setSwapBytes(true);
-	TJpgDec.setCallback(tftImgOutput);
-	TJpgDec.drawFsJpg(0, 0, "/skeleton.jpg");
-	tft.printf("FW: %d", FW_VERSION);
-	tft.printf("HW: %d.%d", HW_MAJOR_VER, HW_MINOR_VER);
-}
- */
 
 void SD_list()
 {
@@ -1073,6 +1129,9 @@ void keyShortPress(enum BUTTONS button)
 
 				case SCR_GPS:
 					break;
+
+				default:
+					break;
 			}
 
 			break;
@@ -1154,6 +1213,9 @@ void keyLongPress(enum BUTTONS button)
 				case SCR_TIME:
 				case SCR_GPS:
 					break;
+
+				default:
+					break;
 			}
 
 			break;
@@ -1220,6 +1282,9 @@ void prevScr()
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
 
 			break;
+
+		default:
+			break;
 	}
 
 	openScr(screen);
@@ -1273,6 +1338,9 @@ void nextScr()
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 
 			break;
+
+		default:
+			break;
 	}
 
 	openScr(screen);
@@ -1315,15 +1383,39 @@ void openScr(enum SCREENS scr)
 void renderScreen(enum SCREENS scr)
 {
 	debugI("Ekran: %d Przyciskow: %d", scr, ctrl_list.size());
-	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
-	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
-	tft.setTextColor(TFT_WHITE);
-	tft.drawCentreString("Ekran " + String(screen), tft.width() / 2, tft.height() / 2, 2);
+
+	switch (scr)
+	{
+		case SCR_UPDATE:
+			tft.drawLine(map(fw_upd_progress, 0, 100, 0, 160), 32, map(fw_upd_progress, 0, 100, 0, 160), 128, TFT_YELLOW);
+			//Serial.println(fw_upd_progress);
+			break;
+
+		case SCR_WELCOME:
+			/* TJpgDec.setJpgScale(1);
+			TJpgDec.setSwapBytes(true);
+			TJpgDec.setCallback(tftImgOutput);
+			TJpgDec.drawFsJpg(0, 0, "/skeleton.jpg");
+			*/
+			tft.setCursor(0, TFT_HEIGHT / 2);
+			tft.setTextColor(TFT_WHITE);
+			tft.printf("FW: %d\r\n", FW_VERSION);
+			tft.printf("HW: %d.%d", HW_MAJOR_VER, HW_MINOR_VER);
+			break;
+
+		default:
+			tft.fillRect(0, 32, 160, 96, TFT_BLACK);							// Wyczysc ekran poza toolbarem
+			tft.drawRect(0, 32, 160, 96, TFT_YELLOW);							// Ramka - sygnalizuje przelaczanie ekranow
+			tft.drawCentreString("Ekran " + String(screen), tft.width() / 2, tft.height() / 2, 2);
+			break;
+	}
 }
 
 void renderToolbar(enum TOOLBAR_ITEMS item)
 {
-	String x;
+	String hh, mm;
+	int tz = conf.getInt("tz");													// Strefa czasowa
+
 	switch (item)
 	{
 		case WIFI_XOFF:
@@ -1331,16 +1423,24 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			break;
 
 		case WIFI_XAP:
+			tft.drawBitmap(TBARX_WIFI, 0, ap_sym, 32, 32, TFT_GREEN, TFT_BLACK);
 			break;
 
 		case WIFI_XSTA:
+			tft.drawBitmap(TBARX_WIFI, 0, wifi_sym, 32, 32, TFT_GREEN, TFT_BLACK);
 			break;
 
 		case GPS_DATETIME:
-			tft.setTextColor(TFT_LIGHTGREY);									// Wyswietl czas na szaro
-			//tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
-			x = String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second());
-			tft.drawString(x, TBARX_DATETIME, 0, 1);
+			tft.fillRect(TBARX_TIME, 0, 32, 8, TFT_BLACK);						// Zamaz poprzedni odczyt
+			even_odd ? tft.setTextColor(TFT_WHITE) : tft.setTextColor(TFT_BLACK);	// Co sekunde zmien kolor (miganie)
+			hh = String((gps.time.hour() + tz) % 24);							// Modulo 24
+			mm = String(gps.time.minute());
+
+			if (hh.length() == 1) hh = "0" + hh;
+
+			if (mm.length() == 1) mm = "0" + mm;
+
+			tft.drawString(hh + ":" + mm, TBARX_TIME, 0, 1);
 			break;
 
 		case GPS_FIX:
@@ -1351,18 +1451,26 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, TFT_RED);
 			break;
 
-		case MEMORY:
+		case MEM_FREE:
+			tft.drawBitmap(TBARX_MEMORY, 0, memory_sym, 32, 32, TFT_GREEN);
+			break;
+
+		case MEM_AVG:
 			tft.drawBitmap(TBARX_MEMORY, 0, memory_sym, 32, 32, TFT_YELLOW);
 			break;
 
+		case MEM_FULL:
+			tft.drawBitmap(TBARX_MEMORY, 0, memory_sym, 32, 32, TFT_RED);
+			break;
+
 		case SD_OK:
-			tft.drawBitmap(TBARX_SD, 0, sd_sym, 32, 32, TFT_YELLOW);
 			break;
 
 		case SD_NOOK:
 			break;
 
 		case SD_OFF:
+			tft.drawBitmap(TBARX_SD, 0, sd_sym, 32, 32, TFT_DARKGREY);
 			break;
 
 		default:

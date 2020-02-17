@@ -16,9 +16,9 @@ extern "C"
 // 160x128
 #define TBARX_GPS		0
 #define TBARX_WIFI		32
-#define TBARX_SD		64
 #define TBARX_MEMORY	64
-#define TBARX_DATETIME	96
+#define TBARX_SD		96
+#define TBARX_TIME		128
 
 typedef struct
 {
