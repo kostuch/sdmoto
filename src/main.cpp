@@ -19,6 +19,7 @@
 #include "TinyGPS++.h"
 #include "sdmoto.h"																// Konfiguracja kompilacji
 #include "gui.h"																// Definicje GUI
+#include "icons.h"																// Definicje ikon
 
 Ticker				every_sec_tmr;												// Timer sekundowy
 RemoteDebug			Debug;														// Zdalny debug
@@ -82,6 +83,7 @@ void setup()
 	readConf();																	// Odczyt konfiguracji urzadzenia
 	startWebServer();															// Start Serwera web
 	tft.init(NULL, tft_cs, NULL, NULL);											// Init TFT (DC, CS, RST, TCS, CS via driver)
+	//tft.setSwapBytes(true);
 	analogWrite(BL_PIN, pwm_val);												// DEBUG
 	tft.setRotation(1);
 	tft.fillScreen(TFT_BLACK);
@@ -95,7 +97,8 @@ void setup()
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	renderToolbar(WIFI_XOFF);													// Ikona WiFi
 	renderToolbar(GPS_NOFIX);													// Ikona GPS
-	renderToolbar(MEMORY);														// Ikona pamieci
+	//renderToolbar(MEMORY);														// Ikona pamieci
+	renderToolbar(SD_OK);														// Ikona karty SD
 	renderToolbar(GPS_DATETIME);												// Czas
 	openScr(screen);															// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
@@ -163,9 +166,11 @@ void everySecTask()
 	//debugI("Napiecie (RAW): %d (REAL): %.1f", pomiar, (pomiar / 1024.0) * 22);
 	if (gps.date.isUpdated())
 	{
-		tft.setCursor(TBARX_DATETIME, 0);
+		tft.fillRect(TBARX_DATETIME, 0, 64, 8, TFT_BLACK);
 		tft.setTextColor(TFT_GREEN);
-		tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
+		String x = String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second());
+		tft.drawString(x, TBARX_DATETIME, 0, 1);
+		//tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
 	}
 }
 
@@ -854,6 +859,7 @@ void btnCheck()
 			prev_button = button_num;											// Zapamietaj jaki to byl przycisk
 			break;																// Przerwij
 		}
+
 		button_num = BTN_RELEASED;
 	}
 
@@ -1142,6 +1148,7 @@ void keyLongPress(enum BUTTONS button)
 				case SCR_COMBO:
 					if (conf.getInt("imp_src") == 1) gps_dist2 = 0;				// Skasuj dystans odcinka
 					else pulses_cnt2 = 0;
+
 					break;
 
 				case SCR_TIME:
@@ -1214,6 +1221,7 @@ void prevScr()
 
 			break;
 	}
+
 	openScr(screen);
 }
 
@@ -1266,6 +1274,7 @@ void nextScr()
 
 			break;
 	}
+
 	openScr(screen);
 }
 
@@ -1283,6 +1292,7 @@ void openScr(enum SCREENS scr)
 	if (screen_buf.scr_open_exe) screen_buf.scr_open_exe();						// Uruchom funkcje skojarzona z otwarciem nowego ekranu
 
 	ctrl_list.clear();															// Wyczysc stara liste przyciskow
+
 	// Jezeli sa jakies przyciski, to utworz z nich liste
 	for (uint8_t btn = 0; btn < sizeof(ctrls_data) / sizeof(btn_t); btn++)		// Przejrzyj wszystkie przyciski we FLASH
 	{
@@ -1292,14 +1302,14 @@ void openScr(enum SCREENS scr)
 	}
 
 	renderScreen(screen);
-/* 	// DEBUG
-	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
-	debugI("Lista: %d", ctrl_list.size());
+	/* 	// DEBUG
+		SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+		debugI("Lista: %d", ctrl_list.size());
 
-	for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)
-		debugI("Scr: %d Key_id: %d Label: %s", idx->screen_id, idx->key_id, idx->lbl);
-	//
- */
+		for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)
+			debugI("Scr: %d Key_id: %d Label: %s", idx->screen_id, idx->key_id, idx->lbl);
+		//
+	 */
 }
 
 void renderScreen(enum SCREENS scr)
@@ -1313,9 +1323,11 @@ void renderScreen(enum SCREENS scr)
 
 void renderToolbar(enum TOOLBAR_ITEMS item)
 {
+	String x;
 	switch (item)
 	{
 		case WIFI_XOFF:
+			tft.drawBitmap(TBARX_WIFI, 0, wifi_sym, 32, 32, TFT_LIGHTGREY);
 			break;
 
 		case WIFI_XAP:
@@ -1325,31 +1337,35 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			break;
 
 		case GPS_DATETIME:
-			if (gps.location.isValid()) tft.setTextColor(TFT_BLACK);// Wyswietl czas w kontrascie
-			else tft.setTextColor(TFT_LIGHTGREY);// Wyswietl czas na szaro
-
-			tft.setCursor(TBARX_DATETIME, 0);
-			tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
+			tft.setTextColor(TFT_LIGHTGREY);									// Wyswietl czas na szaro
+			//tft.printf("%02d:%02d:%02d", gps.time.hour(), gps.time.minute(), gps.time.second());
+			x = String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second());
+			tft.drawString(x, TBARX_DATETIME, 0, 1);
 			break;
 
 		case GPS_FIX:
-			//tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, ILI9341_GREEN, ILI9341_LIGHTGREY);
+			tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, TFT_GREEN);
 			break;
 
 		case GPS_NOFIX:
-			//tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, ILI9341_RED, ILI9341_LIGHTGREY);
+			tft.drawBitmap(TBARX_GPS, 0, satellite_sym, 32, 32, TFT_RED);
 			break;
 
 		case MEMORY:
+			tft.drawBitmap(TBARX_MEMORY, 0, memory_sym, 32, 32, TFT_YELLOW);
 			break;
 
 		case SD_OK:
+			tft.drawBitmap(TBARX_SD, 0, sd_sym, 32, 32, TFT_YELLOW);
 			break;
 
 		case SD_NOOK:
 			break;
 
 		case SD_OFF:
+			break;
+
+		default:
 			break;
 	}
 }
