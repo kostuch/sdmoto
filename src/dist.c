@@ -1,19 +1,18 @@
 #include <Arduino.h>
 #include "dist.h"
 
-void openDist()
-{
-	
-}
-
+//void openDist() {}
 void closeDist() {}
 
-unsigned long calculate_distance(unsigned long pulses)
+void btnStopStart(void) {}
+/* uint32_t calculateDistanceIMP(uint32_t pulses)
 {
 	//unsigned long scale = 100000 / dev_config.dist_cal;							// Skalowanie
 	//return (pulses * scale / 1000);
+	distance_current = pulses * 100 / calibration.cal_distance;
+	distance_total = pulses.imp_total * 100 / calibration.cal_distance;
 	return 0;
-}
+} */
 /* 
 void dist_cal_up()
 {

@@ -10,9 +10,9 @@ bool changed_dist_cal;
 
 void openDist(void);
 void distances_close(void);
-unsigned long calculate_distance(unsigned long pulses);
 void update_dist_spd(void);
 void dist_cal_up(void);
 void dist_cal_dn(void);
+void btnStopStart(void);
 
 #endif /* DIST_H_ */

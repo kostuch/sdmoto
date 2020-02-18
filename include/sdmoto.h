@@ -26,7 +26,8 @@
 // EERAM adresy
 #define EERAM_BASE	0x0000														// Pierwszy adres w EERAM
 #define LAST_SCREEN	EERAM_BASE													// Ostatni ekran
-#define DIST1		(LAST_SCREEN + 1)											// Dystans odcinka (impulsy lub dystans)
+#define BRIGHTNESS	(LAST_SCREEN + 1)
+#define DIST1		(BRIGHTNESS + 2)											// Jasnosc ekranu
 #define DIST2		(DIST1 + 4)													// Dystans calkowity (impulsy lub dystans)
 #define LAST_WPT	(DIST2 + 4)													// Ostatni waypoint z listy do ktorego byla nawigacja
 #define DIST_CAL	(LAST_WPT + 2)												// Kalibracja dystansu
@@ -35,6 +36,7 @@
 
 #define LONG_PRESS	500															// Czas dlugiego wcisniecia [ms]
 #define AP_TIMEOUT	10															// Czas na polaczenie z Access Pointem
+#define NUM_KEYS	4															// Ilosc przyciskow na ekranie
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
@@ -43,6 +45,12 @@ enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE, SCR
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
+
+typedef struct
+{
+	uint16_t 	dist_cal;
+	uint16_t 	volt_cal;
+} cal_t;
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 bool connected;																	// Flaga WiFi
@@ -58,9 +66,9 @@ enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
 volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow
-uint32_t gps_dist1, gps_dist2;													// Dystanse (dla GPS)
+uint32_t gps_dist1, gps_dist2, imp_dist1, imp_dist2;							// Dystanse (dla GPS i impulsatora osobne)
 int fw_upd_progress;															// Postep upgrade
-//uint8_t spiffs_usage;															// Zajetosc SPIFFS
+cal_t calibration;
 
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
 void everySecTask(void);
@@ -78,6 +86,8 @@ void openScr(enum SCREENS scr);
 void (*closeScr)(void);
 void renderToolbar(enum TOOLBAR_ITEMS item);
 void renderScreen(enum SCREENS scr);
+uint16_t eeram_read16(int16_t addr);
+uint32_t eeram_read32(int16_t addr);
 void eeram_save16(int16_t addr, uint16_t val);
 void eeram_save32(int16_t addr, uint32_t val);
 void setupPins(void);															// Ustawienie pinow GPIO
@@ -99,6 +109,8 @@ void SD_list(void);
 String getContentType(String filename);
 String HTMLHeader(void);
 String HTMLFooter(void);
+void computeDistIMP(void);
+uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length);
 
 /*
 
@@ -112,20 +124,6 @@ String HTMLFooter(void);
 #define COMBO_CAL_VOLT	1
 #define COMBO_CAL_TEMP	2
 
-typedef struct
-{
-	uint16_t 	dist_cal;
-	uint16_t 	volt_cal;
-	uint16_t 	temp_cal;
-} cal_t;
-
-typedef struct
-{
-	int16_t		x;
-	int16_t		y;
-} point_t;
-
-cal_t calibrations;
 bool changed_volt_cal;
 bool changed_temp_cal;
 uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie

@@ -19,6 +19,7 @@ extern "C"
 #define TBARX_MEMORY	64
 #define TBARX_SD		96
 #define TBARX_TIME		128
+#define UTLY			32
 
 typedef struct
 {
@@ -33,11 +34,11 @@ btn_t key_buf;
 
 const btn_t ctrls_data[] PROGMEM =
 {
-	//{0, 0, 100, 100, 50, 10, (char *) "Kalibracja", btn_dist_cal},
-	{1, 0, 100, 100, 50, 10, (char *) "Usun czasy", btnClrTimes},
-	{2, 0, 100, 100, 50, 10, (char *) "Zapis sladu", btnSaveTrk},
-	{2, 1, 100, 100, 50, 10, (char *) "Zapis punktow", btnSaveWpt},
-	{2, 2, 100, 100, 50, 10, (char *) "Navi do wpt", btnNav2Wpt},
+	{0, 0, 65, 110, 32, 12, (char *) "PAUZA", btnStopStart},
+	{1, 0, 70, 100, 80, 12, (char *) "Usun czasy", btnClrTimes},
+	{2, 0, 3, 35, 70, 12, (char *) "Zapis TRK", btnSaveTrk},
+	{2, 1, 3, 49, 70, 12, (char *) "Zapis WPT", btnSaveWpt},
+	{2, 2, 3, 63, 70, 12, (char *) "Navi do WPT", btnNav2Wpt},
 };
 
 typedef struct

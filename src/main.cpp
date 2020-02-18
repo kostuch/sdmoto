@@ -26,7 +26,7 @@ RemoteDebug			Debug;														// Zdalny debug
 PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
 SerialRAM			eeram;														// EERAM
 TFT_eSPI 			tft = TFT_eSPI();											// Wyswietlacz TFT
-TinyGPSPlus			gps;
+TinyGPSPlus			gps;														// GPS
 SdFat				sd;															// Karta SD
 File				dir;														// Katalog na SD
 File				file;														// Plik na SD
@@ -41,7 +41,6 @@ WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
 uint16_t pwm_val = 0;
-uint16_t kalibracja = 100;
 
 #define SD_CS_PIN 0 															// Fake value dla SdFat
 #define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI)							// Magia dla SdFat
@@ -73,8 +72,7 @@ void setup()
 	if (!sd.begin(SD_CONFIG)) Serial.println("Karta SD sie zesrala.");			// Init SDCard
 
 	readConf();																	// Odczyt konfiguracji urzadzenia
-	initWiFi();
-	//startWebServer();															// Start Serwera web
+	initWiFi();																	// Init WiFi (nieblokujacy)
 	tft.init(NULL, tft_cs, NULL, NULL);											// Init TFT (DC, CS, RST, TCS, CS via driver)
 	//tft.setSwapBytes(true);
 	analogWrite(BL_PIN, pwm_val);												// DEBUG
@@ -88,6 +86,7 @@ void setup()
 	renderScreen(SCR_WELCOME);													// Pokaz wizytowke
 	delay(2000);																// Chwila...
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
+	calibration.dist_cal = eeram_read16(DIST_CAL);								// Odczyt kalibracji dystansu (dla impulsatora)
 	openScr(screen);															// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	Serial.println("Koniec SETUP!");
@@ -101,7 +100,8 @@ void loop()
 
 	if (imp_signal)
 	{
-		debugI("Przerwanie IMP");
+		computeDistIMP();
+		renderScreen(SCR_DIST);
 		// Po obsludze przerwania
 		imp_signal = false;														// Przerwanie obsluzone
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
@@ -185,18 +185,18 @@ void everySecTask()
 
 	if (gps.location.isValid() && (gps.location.age() < 2000))					// Jezeli swierza lokalizacja
 	{
-		if (!fix)
+		if (!fix)																// Jezeli go nie bylo
 		{
-			renderToolbar(GPS_FIX);												// Jezeli go nie bylo, to przerysuj ikone
-			fix = true;																// To jest FIX
+			renderToolbar(GPS_FIX);												// Przerysuj ikone
+			fix = true;															// Jest FIX
 		}
 	}
 	else
 	{
-		if (fix)
+		if (fix)																// Jezeli byl
 		{
-			renderToolbar(GPS_NOFIX);											// Jezeli byl, to przerysuj ikone
-			fix = false;
+			renderToolbar(GPS_NOFIX);											// Przerysuj ikone
+			fix = false;														// Nie ma FIXa
 		}
 	}
 }
@@ -225,6 +225,24 @@ ICACHE_RAM_ATTR void imp_irq(void)
 ICACHE_RAM_ATTR void i2c_irq(void)
 {
 	pcf_signal = true;															// Flaga zdarzenia na ekspanderze
+}
+
+uint16_t eeram_read16(int16_t addr)
+{
+	uint16_t temp = 0;
+
+	for (size_t i = 0; i < 2; i++) temp += (eeram.read(addr + i) << (i * 8));
+
+	return temp;
+}
+
+uint32_t eeram_read32(int16_t addr)
+{
+	uint32_t temp = 0;
+
+	for (size_t i = 0; i < 4; i++) temp += (eeram.read(addr + i) << (i * 8));
+
+	return temp;
 }
 
 void eeram_save16(int16_t addr, uint16_t val)
@@ -288,8 +306,8 @@ void readConf()
 	params += String(INPUTRADIO);
 	params += F(","
 	            "'options':["
-	            "{'v':'g','l':'GPS'},"
-	            "{'v':'i','l':'Impulsator'}],"
+	            "{'v':'0','l':'GPS'},"
+	            "{'v':'1','l':'Impulsator'}],"
 	            "'default':'g'"
 	            "},"
 	            "{"
@@ -587,11 +605,15 @@ void update_started(void)
 	web_server.sendHeader(F("Connection"), F("close"));
 	web_server.sendHeader(F("Access-Control-Allow-Origin"), F("*"));
 	web_server.send(200, F("text/plain"), F("Czekaj na zakonczenie update..."));
-	Serial.println(F("Update started"));
+	debugI("Update started");
+	mux_switch(STARTUP);														// Wylaczenie sygnalu przerwan
 }
 void update_finished(void)
 {
-	Serial.println(F("\r\nUpdate finished"));
+	//debugI("Update finished");
+	tft.setCursor(32, TFT_HEIGHT / 2, 1);
+	tft.setTextColor(TFT_BLACK);
+	tft.printf_P(PSTR("Restartuje..."));
 }
 
 void update_progress(int cur, int total)
@@ -744,14 +766,14 @@ void startWebServer()
 	web_server.on(F("/cal"), handleCalibration);
 	web_server.on(F("/cal/cal_dist_plus"), []()
 	{
-		kalibracja++;
+		calibration.dist_cal++;
 		web_server.sendHeader("Location", "/cal", true);
 		web_server.send (302, "text/plain", "");
 		//web_server.send(200, F("text/html"), handleCalibration());
 	});
 	web_server.on(F("/cal/cal_dist_minus"), []()
 	{
-		kalibracja--;
+		calibration.dist_cal--;
 		web_server.sendHeader("Location", "/cal", true);
 		web_server.send (302, "text/plain", "");
 		//web_server.send(200, F("text/html"), handleCalibration());
@@ -824,9 +846,10 @@ void startWebServer()
 
 String handleCalibration()
 {
-	if (web_server.hasArg("SAVE")) Serial.println("SAVE");
+	if (web_server.hasArg("SAVE"))
+		eeram_save16(DIST_CAL, calibration.dist_cal);
 
-	debugI("Nacisniety SAVE po raz %d", kalibracja);
+	//debugI("Nacisniety SAVE po raz %d", kalibracja);
 	String page = HTMLHeader();
 	page += F("<p><h3>Kalibracja metromierza</h3></p>\n");
 	//Image to DataURL converter https://onlinecamscanner.com/image-to-dataurl
@@ -837,7 +860,7 @@ String handleCalibration()
 	          "<p><form action='/cal' method='POST'><button type='button submit' name='SAVE' value='1'"
 	          "class='btn btn-success btn-lg'>Zapis</button></form></p>\n"
 	          "<p><h1>");
-	page += String(kalibracja) + F("</h1></p>");
+	page += String(calibration.dist_cal) + F("</h1></p>");
 	page += HTMLFooter();
 	web_server.send(200, F("text/html"), page);
 	return page;
@@ -958,9 +981,14 @@ void keyShortPress(enum BUTTONS button)
 			switch (screen)
 			{
 				case SCR_DIST:
-					if (conf.getInt("imp_src") == 1) gps_dist1 = 0;				// Skasuj dystans odcinka
-					else pulses_cnt1 = 0;
+					if (conf.getInt("imp_src") == 0) gps_dist1 = 0;				// Skasuj dystans odcinka
+					else
+					{
+						pulses_cnt1 = 0;
+						computeDistIMP();
+					}
 
+					renderScreen(screen);										// Aktualizuj ekran
 					break;
 
 				case SCR_TIME:
@@ -988,8 +1016,12 @@ void keyShortPress(enum BUTTONS button)
 				case SCR_NAVI:
 					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
 					{
-						if (conf.getInt("imp_src") == 1) gps_dist1 = 0;			// Skasuj dystans odcinka
-						else pulses_cnt1 = 0;
+						if (conf.getInt("imp_src") == 0) gps_dist1 = 0;			// Skasuj dystans odcinka
+						else
+						{
+							pulses_cnt1 = 0;
+							computeDistIMP();
+						}
 					}
 					else 														// W trybie zmiany kontrolki
 					{
@@ -1052,8 +1084,12 @@ void keyShortPress(enum BUTTONS button)
 				case SCR_COMBO:
 					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
 					{
-						if (conf.getInt("imp_src") == 1) gps_dist1 = 0;			// Skasuj dystans odcinka
-						else pulses_cnt1 = 0;
+						if (conf.getInt("imp_src") == 0) gps_dist1 = 0;			// Skasuj dystans odcinka
+						else
+						{
+							pulses_cnt1 = 0;
+							computeDistIMP();
+						}
 					}
 					else 														// W trybie zmiany kontrolki
 					{
@@ -1205,9 +1241,14 @@ void keyLongPress(enum BUTTONS button)
 				case SCR_DIST:
 				case SCR_NAVI:
 				case SCR_COMBO:
-					if (conf.getInt("imp_src") == 1) gps_dist2 = 0;				// Skasuj dystans odcinka
-					else pulses_cnt2 = 0;
+					if (conf.getInt("imp_src") == 0) gps_dist2 = 0;				// Skasuj dystans odcinka
+					else
+					{
+						pulses_cnt2 = 0;
+						computeDistIMP();
+					}
 
+					renderScreen(screen);										// Aktualizuj ekran
 					break;
 
 				case SCR_TIME:
@@ -1224,12 +1265,12 @@ void keyLongPress(enum BUTTONS button)
 		case BTN_RT:
 		case BTN_DN:
 		case BTN_LT:
-			/* if (ctrl_list.size())												// Jezeli dla ekranu sa przyciski
+			if (ctrl_list.size())												// Jezeli dla ekranu sa przyciski
 			{
 				if (btn_mode == CHG_SCR) btn_mode = CHG_CTRL;					// Zmien tryb zmiany ekranu/kontrolki
 				else btn_mode = CHG_SCR;
 			}
-			*/
+
 			break;
 	}
 }
@@ -1340,6 +1381,7 @@ void nextScr()
 			break;
 
 		default:
+			screen = SCR_DIST;
 			break;
 	}
 
@@ -1370,25 +1412,23 @@ void openScr(enum SCREENS scr)
 	}
 
 	renderScreen(screen);
-	/* 	// DEBUG
-		SimpleList<btn_t>::iterator idx = ctrl_list.begin();
-		debugI("Lista: %d", ctrl_list.size());
-
-		for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)
-			debugI("Scr: %d Key_id: %d Label: %s", idx->screen_id, idx->key_id, idx->lbl);
-		//
-	 */
 }
 
 void renderScreen(enum SCREENS scr)
 {
-	debugI("Ekran: %d Przyciskow: %d", scr, ctrl_list.size());
-
+	static uint32_t old_gps_dist1, old_gps_dist2, old_imp_dist1, old_imp_dist2;
+	uint8_t cursor_pos;
+	tft.setTextFont(1);
+	tft.setTextColor(TFT_GREEN);
+	tft.fillRect(TBARX_TIME, 10, 32, 8, TFT_BLACK);
+	tft.setCursor(TBARX_TIME, 10);
+	tft.printf("Scr:%d", scr);
+	
 	switch (scr)
 	{
 		case SCR_UPDATE:
-			tft.drawLine(map(fw_upd_progress, 0, 100, 0, 160), 32, map(fw_upd_progress, 0, 100, 0, 160), 128, TFT_YELLOW);
-			//Serial.println(fw_upd_progress);
+			// Prosty progressbar zapelniajacy ekran
+			tft.drawLine(0, map(fw_upd_progress, 0, 100, 128, 32), 160, map(fw_upd_progress, 0, 100, 128, 32), TFT_YELLOW);
 			break;
 
 		case SCR_WELCOME:
@@ -1397,18 +1437,73 @@ void renderScreen(enum SCREENS scr)
 			TJpgDec.setCallback(tftImgOutput);
 			TJpgDec.drawFsJpg(0, 0, "/skeleton.jpg");
 			*/
-			tft.setCursor(0, TFT_HEIGHT / 2);
-			tft.setTextColor(TFT_WHITE);
-			tft.printf("FW: %d\r\n", FW_VERSION);
-			tft.printf("HW: %d.%d", HW_MAJOR_VER, HW_MINOR_VER);
+			tft.setCursor(10, TFT_HEIGHT / 2);
+			tft.setTextColor(TFT_WHITE, TFT_BLACK);
+			tft.printf("FW: %d", FW_VERSION);
+			break;
+
+		case SCR_DIST:
+			cursor_pos = computeEraseArea(imp_dist1, old_imp_dist1, 4);			// Max 10^4 metrow
+			tft.fillRect((cursor_pos * 32), 33, 160 - (cursor_pos * 32) - 1, 48, TFT_BLACK);
+			tft.setTextFont(7);													// Font 7segment
+			tft.setCursor(0, 33);												// Gorny lewy rog
+			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+			tft.printf("%05d", imp_dist1);
+			
+			cursor_pos = computeEraseArea(imp_dist2, old_imp_dist2, 6);			// Max 10^6 metrow
+			//debugI("%d %d %d", imp_dist1, old_imp_dist1, cursor_pos);
+			if (cursor_pos > 3)
+			{
+			tft.fillRect(160 - ((7 - cursor_pos) * 21),
+			 			81,
+						((7 - cursor_pos) * 21) - 1,
+						25, TFT_BLACK);
+			}
+			else 
+			{
+				tft.fillRect(160 - ((7 - cursor_pos) * 21) - 10,
+			 			81,
+						((7 - cursor_pos) * 21) - 1 + 10,
+						25, TFT_BLACK);
+			}
+			tft.setFreeFont(&FreeMonoBold18pt7b);
+			tft.setTextColor(TFT_GOLD, TFT_BLACK);
+			tft.setCursor(160 - (3 * 21), 104);
+			tft.printf("%03d", imp_dist2 % 1000);								// Kilometry
+			tft.setCursor(0, 104);
+			tft.printf("%04d", (imp_dist2 % 10000) / 1000);						// Metry
+			tft.fillCircle(90, 102, 2, TFT_GOLD);								// Kropka oddziela kilometry od metrow
+			old_imp_dist1 = imp_dist1;
+			old_imp_dist2 = imp_dist2;
+			old_gps_dist1 = gps_dist1;
+			old_gps_dist2 = gps_dist2;
+			break;
+
+		case SCR_TIME:
+		case SCR_NAVI:
+		case SCR_COMBO:
+		case SCR_GPS:
+			tft.fillRect(0, 32, 160, 96, TFT_BLACK);							// Wyczysc ekran poza toolbarem
+			tft.drawRect(0, 32, 160, 96, TFT_YELLOW);							// Ramka - sygnalizuje przelaczanie ekranow
 			break;
 
 		default:
-			tft.fillRect(0, 32, 160, 96, TFT_BLACK);							// Wyczysc ekran poza toolbarem
-			tft.drawRect(0, 32, 160, 96, TFT_YELLOW);							// Ramka - sygnalizuje przelaczanie ekranow
-			tft.drawCentreString("Ekran " + String(screen), tft.width() / 2, tft.height() / 2, 2);
 			break;
 	}
+
+	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+
+	if (scr != SCR_UPDATE)														// Dla wszystkich ekranow poza UPDATE
+	{
+		tft.setTextColor(TFT_BLACK);
+		tft.setTextFont(1);
+		for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)					// Dorysuj przyciski
+		{
+			tft.fillRect(idx->x, idx->y, idx->w, idx->h, TFT_CYAN);
+			tft.drawString(idx->lbl, (idx->x) + 2, (idx->y) + 2);
+		}
+	}
+
 }
 
 void renderToolbar(enum TOOLBAR_ITEMS item)
@@ -1436,11 +1531,12 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			hh = String((gps.time.hour() + tz) % 24);							// Modulo 24
 			mm = String(gps.time.minute());
 
-			if (hh.length() == 1) hh = "0" + hh;
+			if (hh.length() == 1) hh = "0" + hh;								// Formatowanie %02d
 
 			if (mm.length() == 1) mm = "0" + mm;
 
-			tft.drawString(hh + ":" + mm, TBARX_TIME, 0, 1);
+			tft.setTextFont(1);
+			tft.drawString(hh + ":" + mm, TBARX_TIME, 0, 1);					// Pokaz czas
 			break;
 
 		case GPS_FIX:
@@ -1476,4 +1572,32 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 		default:
 			break;
 	}
+}
+
+void computeDistIMP()
+{
+	imp_dist1 = (pulses_cnt1 * 100) / calibration.dist_cal;						// Obliczenie dystansu
+	imp_dist2 = (pulses_cnt2 * 100) / calibration.dist_cal;
+}
+
+uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
+{
+	uint8_t digit_pos = 0;
+
+	for (size_t pos = 0; pos < length; pos++)									// Ilosc pozycji dziesietnych liczby
+	{
+		uint32_t d1 = new_val / pow(10, length - pos);							// Kolejne cyfry od lewej
+		uint32_t d2 = old_val / pow(10, length - pos);
+
+		if (d1 - d2) break;														// Jezeli zmiana na pierwszej pozycji od lewej, przerwij
+		else digit_pos++;														// A jezeli sa rowne, zwieksz licznik cyfr
+	}
+
+	return digit_pos;
+}
+
+void openDist()
+{
+	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
+	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow		
 }
