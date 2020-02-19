@@ -37,6 +37,7 @@
 #define LONG_PRESS	500															// Czas dlugiego wcisniecia [ms]
 #define AP_TIMEOUT	10															// Czas na polaczenie z Access Pointem
 #define NUM_KEYS	4															// Ilosc przyciskow na ekranie
+#define SAVE_TIME	5															// Co 5 sekund zapis dystansow do pamieci
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
@@ -55,7 +56,6 @@ typedef struct
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 bool connected;																	// Flaga WiFi
 bool internet;																	// Flaga dostepu do Internetu
-bool bit_state;																	// DEBUG
 bool even_odd;																	// Parzysta/nieparzysta sekunda
 bool fix;																		// FIX GPS
 volatile bool pcf_signal;														// Flaga przerwania z expandera
@@ -66,9 +66,13 @@ enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
 volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow
-uint32_t gps_dist1, gps_dist2, imp_dist1, imp_dist2;							// Dystanse (dla GPS i impulsatora osobne)
 int fw_upd_progress;															// Postep upgrade
-cal_t calibration;
+cal_t calibration;																// Kalibracje
+uint32_t distance1, distance2;													// Dystanse (odcinka i globalny)
+uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lokalizacja
+uint8_t speed;																	// Predkosc
+uint16_t volt;																	// Napiecie
+uint32_t current_time;															// Czas stoperowy
 
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
 void everySecTask(void);
@@ -109,9 +113,21 @@ void SD_list(void);
 String getContentType(String filename);
 String HTMLHeader(void);
 String HTMLFooter(void);
-void computeDistIMP(void);
+void computeDistance(void);
+void computeSpeed(void);
+void computeVolt(void);
 uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length);
-
+void clearWindow(void);
+void openDist(void);
+void openTime(void);
+void openNavi(void);
+void openCombo(void);
+void openGPS(void);
+void btnStopStart(void);
+void btnSaveTrk(void);
+void btnSaveWpt(void);
+void btnNav2Wpt(void);
+void btnClrTimes(void);
 /*
 
 #define IMP_DELAY		10														// Minimalny odstep miedzy zewnetrznymi impulsami

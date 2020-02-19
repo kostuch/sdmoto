@@ -1,16 +1,13 @@
 #ifndef GUI_H_
 #define GUI_H_
 
+/* 
 #ifdef __cplusplus
 extern "C"
 {
-	#include "dist.h"
-	#include "timer.h"
-	#include "navi.h"
-	#include "combo.h"
-	#include "gps.h"
 }
 #endif
+ */
 
 // Koordynaty ikon na pasku
 // 160x128
