@@ -18,10 +18,10 @@
 #include <SerialRAM.h>															// EERAM
 #include "TinyGPS++.h"
 #include "sdmoto.h"																// Konfiguracja kompilacji
-#include "gui.h"																// Definicje GUI
 #include "icons.h"																// Definicje ikon
 
 Ticker				every_sec_tmr;												// Timer sekundowy
+Ticker 				one_shoot;													// Timer jednorazowy
 RemoteDebug			Debug;														// Zdalny debug
 PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
 SerialRAM			eeram;														// EERAM
@@ -87,8 +87,9 @@ void setup()
 	delay(2000);																// Chwila...
 	calibration.dist_cal = eeram_read16(DIST_CAL);								// Odczyt kalibracji dystansu (dla impulsatora)
 	calibration.volt_cal = eeram_read16(VOLT_CAL);								// Odczyt kalibracji napiecia
-	distance1 = eeram_read32(DIST1);											// Odczyt dystansu odcinka
-	distance2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
+	pulses_cnt1 = eeram_read32(DIST1);											// Odczyt dystansu odcinka
+	pulses_cnt2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
+	computeDistance();															// Oblicz dystans
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	openScr(screen);															// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
@@ -104,8 +105,9 @@ void loop()
 	if (imp_signal)
 	{
 		computeDistance();
-		renderScreen(SCR_DIST);
-		// Po obsludze przerwania
+
+		if (screen == SCR_DIST || screen == SCR_NAVI || screen == SCR_COMBO) renderScreen(screen);
+
 		imp_signal = false;														// Przerwanie obsluzone
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
@@ -177,8 +179,17 @@ void everySecTask()
 
 	if (save_time++ > SAVE_TIME)												// Co pewien czas
 	{
-		eeram_save32(DIST1, distance1);											// Zapamietanie dystansow
-		eeram_save32(DIST2, distance2);
+		if (conf.getInt("imp_src") == 0)
+		{
+			eeram_save32(DIST1, distance1);										// Zapamietanie dystansow
+			eeram_save32(DIST2, distance2);
+		}
+		else
+		{
+			eeram_save32(DIST1, pulses_cnt1);									// Zapamietanie impulsow
+			eeram_save32(DIST2, pulses_cnt2);
+		}
+
 		save_time = 0;
 	}
 
@@ -230,11 +241,15 @@ void setupPins()
 
 ICACHE_RAM_ATTR void imp_irq(void)
 {
-	pulses_cnt1++;																// Zwieksz liczniki impulsow
-	pulses_cnt2++;
+	if (!counter_disable)														// Jezeli nie ma blokady metromierza
+	{
+		pulses_cnt1++;															// Zwieksz liczniki impulsow
+		pulses_cnt2++;
+		imp_signal = true;														// Flaga pojawienia sie impulsu
+		detachInterrupt(IMP_IRQ_PIN);											// Odepnij przerwania, bo inaczej CRASH
+	}
+
 	pulses_spd++;																// Impulsy do pomiaru predosci
-	imp_signal = true;															// Flaga pojawienia sie impulsu
-	detachInterrupt(IMP_IRQ_PIN);												// Odepnij przerwania, bo inaczej CRASH
 }
 
 ICACHE_RAM_ATTR void i2c_irq(void)
@@ -430,6 +445,7 @@ bool handleFileRead(String path)
 
 	return false;
 }
+
 void handleFileUpload()
 {
 	if (web_server.uri() != "/list") return;
@@ -625,7 +641,6 @@ void update_started(void)
 }
 void update_finished(void)
 {
-	//debugI("Update finished");
 	tft.setCursor(32, TFT_HEIGHT / 2, 1);
 	tft.setTextColor(TFT_BLACK);
 	tft.printf_P(PSTR("Restartuje..."));
@@ -633,7 +648,6 @@ void update_finished(void)
 
 void update_progress(int cur, int total)
 {
-	//Serial.printf_P(PSTR("HTTP update process at %d of %d\r"), cur, total);
 	fw_upd_progress = (cur * 100) / total;										// Procent postepu aktualizacji
 	renderScreen(SCR_UPDATE);
 }
@@ -861,10 +875,8 @@ void startWebServer()
 
 String handleCalibration()
 {
-	if (web_server.hasArg("SAVE"))
-		eeram_save16(DIST_CAL, calibration.dist_cal);
+	if (web_server.hasArg("SAVE")) eeram_save16(DIST_CAL, calibration.dist_cal);
 
-	//debugI("Nacisniety SAVE po raz %d", kalibracja);
 	String page = HTMLHeader();
 	page += F("<p><h3>Kalibracja metromierza</h3></p>\n");
 	//Image to DataURL converter https://onlinecamscanner.com/image-to-dataurl
@@ -985,30 +997,25 @@ void btnCheck()
 
 void keyShortPress(enum BUTTONS button)
 {
-	debugI("Krotkie nacisniecie %d", button);
-
 	switch (button)
 	{
-		case BTN_RELEASED:
-			break;
-
 		case BTN_RST:
-			switch (screen)
+			if (btn_mode == CHG_SCR)
 			{
-				case SCR_DIST:
-					if (conf.getInt("imp_src") == 0) distance1 = 0;				// Skasuj dystans odcinka
-					else
-					{
-						pulses_cnt1 = 0;
-						computeDistance();
-					}
+				switch (screen)
+				{
+					case SCR_DIST:
+						if (conf.getInt("imp_src") == 0) distance1 = 0;				// Skasuj dystans odcinka
+						else
+						{
+							pulses_cnt1 = 0;										// Skasuj licznik impulsow
+							computeDistance();										// Przelicz dystanse
+						}
 
-					renderScreen(screen);										// Aktualizuj ekran
-					break;
+						renderScreen(screen);									// Aktualizuj ekran
+						break;
 
-				case SCR_TIME:
-					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
-					{
+					case SCR_TIME:
 						if (timer_state == TMR_STOP)
 						{
 							timer_state = TMR_RUN;								// Uruchom stoper
@@ -1020,169 +1027,60 @@ void keyShortPress(enum BUTTONS button)
 							//save_time();										// Zanotuj miedzyczas
 							current_time = 0;									// Skasuj czas
 						}
-					}
-					else 														// W trybie menu
-					{
-						// obsluga kasowania miedzyczasow
-					}
 
-					break;
+						break;
 
-				case SCR_NAVI:
-					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
-					{
+					case SCR_NAVI:
+						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
+						else
+						{
+							pulses_cnt1 = 0;									// Skasuj licznik impulsow
+							computeDistance();									// Przelicz dystanse
+						}
+
+						renderScreen(screen);									// Aktualizuj ekran
+						break;
+
+					case SCR_COMBO:
 						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
 						else
 						{
 							pulses_cnt1 = 0;
 							computeDistance();
 						}
-					}
-					else 														// W trybie zmiany kontrolki
+
+						renderScreen(screen);									// Aktualizuj ekran
+						break;
+
+					default:
+						break;
+				}
+			}
+			else
+			{
+				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+
+				if (!(ctrl_state[screen][1] & 0x80))							// Jezeli (zadna) kontrolka nie jest aktywna (nieustawione MSB)
+				{
+					ctrl_state[screen][1] = ctrl_state[screen][0];				// Zapisz biezaca kontrolke jako aktywna
+					ctrl_state[screen][1] |= 0x80;								// Ustaw MSB jako znacznik aktywowanej kontrolki
+					renderCtrl(idx + ctrl_state[screen][0]);
+					btnExe = idx->key_exec;										// exe w zaleznosci od kontrolki
+
+					if (btnExe) btnExe(true);									// Wykonaj
+				}
+				else
+				{
+					// Jezeli ustawiony MSB i nr biezacej kontrolki taki jak nr aktywnej kontrolki
+					if ((ctrl_state[screen][1] & 0x80) && ((ctrl_state[screen][1] & 0x7F) == ctrl_state[screen][0]))
 					{
-						/* 							if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_TRK))			// Kontrolka "Zapisuj slad"
-													{
-														if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-														{
-															ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
-															// Zmien wyglad kontrolki
-															// Obsluga zapisu sladu do gpx
-														}
-														else 												// MSB = 1 (kontrolka aktywna)
-														{
-															ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
-															// Zmien wyglad kontrolki
-															// Zatrzymaj zapis sladu w gpx
-														}
+						ctrl_state[screen][1] &= 0x7F;							// Skasuj MSB jako znacznik deaktywowanej kontrolki
+						renderCtrl(idx + ctrl_state[screen][0]);
+						btnExe = idx->key_exec;									// exe w zaleznosci od kontrolki
 
-														return;
-													}
-						 */
-						/*							if (ctl_pos[SCR_NAVI] & (1 << NAVI_SAVE_WPT))			// Kontrolka "Zapisuj waypointy"
-													{
-														if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-														{
-															ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
-															// Zmien wyglad kontrolki
-															// Obsluga zapisu waypointow do gpx
-														}
-														else 												// MSB = 1 (kontrolka aktywna)
-														{
-															ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
-															// Zmien wyglad kontrolki
-															// Zatrzymaj zapis waypointow w gpx
-														}
-
-														return;
-													}
-						 */
-						/* 							if (ctl_pos[SCR_NAVI] & (1 << NAVI_TO_WPT))				// Kontrolka "Nawiguj do waypointow"
-													{
-														if (!(ctl_pos[SCR_NAVI] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-														{
-															ctl_pos[SCR_NAVI] |= 0x80;						// Ustaw MSB
-															// Zmien wyglad kontrolki
-															// Obsluga nawigacji
-														}
-														else 												// MSB = 1 (kontrolka aktywna)
-														{
-															ctl_pos[SCR_NAVI] &= 0xEF;						// Skasuj MSB
-															// Zmien wyglad kontrolki
-															// Zatrzymaj nawigacje po waypointach
-														}
-
-														return;
-													}
-						 */
+						if (btnExe) btnExe(false);								// Wykonaj
 					}
-
-				case SCR_COMBO:
-					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranu
-					{
-						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
-						else
-						{
-							pulses_cnt1 = 0;
-							computeDistance();
-						}
-					}
-					else 														// W trybie zmiany kontrolki
-					{
-						/* 							if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_DIST))
-													{
-														if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-														{
-															ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
-															// Zmien wyglad kontrolki
-														}
-														else 												// MSB = 1 (kontrolka aktywna)
-														{
-															//if (changed_dist_cal)
-															{
-																eeram_save16(DIST_CAL, calibrations.dist_cal);
-																// Pokaz komunikat
-															}
-
-															ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
-															// Zmien wyglad kontrolki
-														}
-
-														return;
-													}
-						 */
-						/* 							if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_VOLT))
-													{
-														if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-														{
-															ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
-															// Zmien wyglad kontrolki
-														}
-														else 												// MSB = 1 (kontrolka aktywna)
-														{
-															//if (changed_volt_cal)
-															{
-																eeram_save16(VOLT_CAL, calibrations.volt_cal);
-																// Pokaz komunikat
-															}
-
-															ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
-															// Zmien wyglad kontrolki
-														}
-
-														return;
-													}
-						 */
-						/* 							if (ctl_pos[SCR_COMBO] & (1 << COMBO_CAL_TEMP))
-													{
-														if (!(ctl_pos[SCR_COMBO] & (1 << 7)))				// MSB = 0 (kontrolka nieaktywna)
-														{
-															ctl_pos[SCR_COMBO] |= 0x80;						// Ustaw MSB
-															// Zmien wyglad kontrolki
-														}
-														else 												// MSB = 1 (kontrolka aktywna)
-														{
-															if (changed_volt_cal)
-															{
-																eeram_save16(TEMP_CAL, calibrations.temp_cal);
-																// Pokaz komunikat
-															}
-
-															ctl_pos[SCR_COMBO] &= 0xEF;						// Skasuj MSB
-															// Zmien wyglad kontrolki
-														}
-
-														return;
-													}
-						 */
-					}
-
-					break;
-
-				case SCR_GPS:
-					break;
-
-				default:
-					break;
+				}
 			}
 
 			break;
@@ -1190,23 +1088,22 @@ void keyShortPress(enum BUTTONS button)
 		case BTN_UP:
 		case BTN_RT:
 			if (btn_mode == CHG_SCR) nextScr();									// Nastepny ekran
-			else 																// Nastepna kontrolka
+			else																// Nastepna kontrolka
 			{
-				switch (screen)
+				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+
+				if (ctrl_state[screen][0] > 0)									// Jezeli jeszcze jakies dostepne kontrolki
 				{
-					case SCR_NAVI:
-						//if (ctl_pos[SCR_NAVI] < 4) ctl_pos[SCR_NAVI] <<= 1;		// Poprzedni id przycisku
-						//else ctl_pos[SCR_NAVI] = 1;								// lub od konca
-						break;
-
-					case SCR_COMBO:
-						//if (ctl_pos[SCR_COMBO] < 4) ctl_pos[SCR_COMBO] <<= 1;	// Poprzedni id przycisku
-						//else ctl_pos[SCR_COMBO] = 1;							// lub od konca
-						break;
-
-					default:
-						break;
+					ctrl_state[screen][0]--;			 						// Poprzednia
+					renderCtrl((idx + ctrl_state[screen][0]) + 1);				// Usun focus ze starej
 				}
+				else
+				{
+					ctrl_state[screen][0] = ctrl_list.size() - 1;				// Albo od konca
+					renderCtrl(idx);											// Usun focus z pierwszej
+				}
+
+				renderCtrl(idx + ctrl_state[screen][0]);
 			}
 
 			break;
@@ -1216,27 +1113,25 @@ void keyShortPress(enum BUTTONS button)
 			if (btn_mode == CHG_SCR) prevScr();									// Poprzedni ekran
 			else 																// Poprzednia kontrolka
 			{
-				// MSB - kontrolka aktywowana
-				// 0000.0100
-				// 0000.0010
-				// 0000.0001
-				switch (screen)
+				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+
+				if (ctrl_state[screen][0] < (ctrl_list.size() - 1))				// Jezeli jeszcze jakies dostepne kontrolki
 				{
-					case SCR_NAVI:
-						//if (ctl_pos[SCR_NAVI] > 1) ctl_pos[SCR_NAVI] >>= 1;		// Kolejny id przycisku
-						//else ctl_pos[SCR_NAVI] = 4;								// lub od poczatku
-						break;
-
-					case SCR_COMBO:
-						//if (ctl_pos[SCR_COMBO] > 1) ctl_pos[SCR_COMBO] >>= 1;	// Kolejny id przycisku
-						//else ctl_pos[SCR_COMBO] = 4;							// lub od poczatku
-						break;
-
-					default:
-						break;
+					ctrl_state[screen][0]++;		 							// Nastepna
+					renderCtrl((idx + ctrl_state[screen][0]) - 1);				// Usun focus ze starej
 				}
+				else
+				{
+					ctrl_state[screen][0] = 0;									// Albo od poczatku
+					renderCtrl(idx + ctrl_list.size() - 1);						// Usun focus z ostatniej
+				}
+
+				renderCtrl(idx + ctrl_state[screen][0]);
 			}
 
+			break;
+
+		default:
 			break;
 	}
 }
@@ -1247,27 +1142,24 @@ void keyLongPress(enum BUTTONS button)
 
 	switch (button)
 	{
-		case BTN_RELEASED:
-			break;
-
 		case BTN_RST:
 			switch (screen)
 			{
 				case SCR_DIST:
 				case SCR_NAVI:
 				case SCR_COMBO:
-					if (conf.getInt("imp_src") == 0) distance2 = 0;				// Skasuj dystans odcinka
-					else
+					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranow
 					{
-						pulses_cnt2 = 0;
-						computeDistance();
+						if (conf.getInt("imp_src") == 0) distance2 = 0;			// Skasuj dystans odcinka
+						else
+						{
+							pulses_cnt2 = 0;
+							computeDistance();
+						}
+
+						renderScreen(screen);									// Aktualizuj ekran
 					}
 
-					renderScreen(screen);										// Aktualizuj ekran
-					break;
-
-				case SCR_TIME:
-				case SCR_GPS:
 					break;
 
 				default:
@@ -1280,23 +1172,32 @@ void keyLongPress(enum BUTTONS button)
 		case BTN_RT:
 		case BTN_DN:
 		case BTN_LT:
-			if (ctrl_list.size())												// Jezeli dla ekranu sa przyciski
+			if (ctrl_list.size())												// Jezeli dla ekranu sa jakiekolwiek przyciski
 			{
-				if (btn_mode == CHG_SCR) btn_mode = CHG_CTRL;					// Zmien tryb zmiany ekranu/kontrolki
-				else btn_mode = CHG_SCR;
+				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+
+				if (btn_mode == CHG_SCR)
+				{
+					btn_mode = CHG_CTRL;										// Zmien tryb zmiany ekranu/kontrolki
+					renderCtrl(idx + ctrl_state[screen][0]);
+					tft.drawRect(0, 32, 160, 96, TFT_BLACK);					// Skasuj ramke okna
+				}
+				else
+				{
+					btn_mode = CHG_SCR;											// Zmien tryb zmiany ekranu/kontrolki
+					renderCtrl(idx + ctrl_state[screen][0]);
+					tft.drawRect(0, 32, 160, 96, TFT_YELLOW);					// Rysuj ramke okna
+				}
 			}
 
 			break;
+
+		default:
+			break;
 	}
 }
-
 void prevScr()
 {
-	// DIST
-	// TIME
-	// NAVI
-	// COMBO
-	// GPS
 	switch (screen)
 	{
 		case SCR_DIST:
@@ -1345,14 +1246,8 @@ void prevScr()
 
 	openScr(screen);
 }
-
 void nextScr()
 {
-	// DIST
-	// TIME
-	// NAVI
-	// COMBO
-	// GPS
 	switch (screen)
 	{
 		case SCR_DIST:
@@ -1402,7 +1297,6 @@ void nextScr()
 
 	openScr(screen);
 }
-
 void openScr(enum SCREENS scr)
 {
 	if (closeScr) closeScr();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)
@@ -1425,6 +1319,11 @@ void openScr(enum SCREENS scr)
 
 		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk do listy jezeli nalezy do ekranu
 	}
+
+	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+
+	for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)						// Rysuj kontrolki
+		renderCtrl(idx);
 
 	tft.setTextFont(1);															// DEBUG - pokaz numer ekranu
 	tft.setTextColor(TFT_GREEN);
@@ -1497,20 +1396,42 @@ void renderScreen(enum SCREENS scr)
 		default:
 			break;
 	}
+}
 
-	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+void renderCtrl(btn_t *ctrl)
+{
+	tft.setTextFont(1);
+	uint16_t frame_c, fill_c, txt_c;
+	bool focus, active;
 
-	if (scr != SCR_UPDATE)														// Dla wszystkich ekranow poza UPDATE
+	// Jezeli ustawiony MSB i key_id na młodszych bitach, to kontrolka aktywna
+	if ((ctrl_state[screen][1] & 0x80) && ((ctrl_state[screen][1] & 0x7F) == ctrl->key_id)) active = true;
+	else active = false;
+
+	// Jezeli key_id taki jak [screen][0] i tryb zmiany kontrolek to kontrolka ma focus
+	if ((ctrl_state[screen][0] == ctrl->key_id) && (btn_mode == CHG_CTRL)) focus = true;
+	else focus = false;
+
+	if (focus) frame_c = TFT_YELLOW;
+	else frame_c = TFT_BLACK;
+
+	txt_c = TFT_BLACK;															// Domyslny kolor etykiety
+
+	if (active)
 	{
-		tft.setTextColor(TFT_BLACK);
-		tft.setTextFont(1);
-
-		for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)					// Dorysuj przyciski
-		{
-			tft.fillRect(idx->x, idx->y, idx->w, idx->h, TFT_CYAN);
-			tft.drawString(idx->lbl, (idx->x) + 2, (idx->y) + 2);
-		}
+		fill_c = TFT_MAGENTA;
+		txt_c = TFT_WHITE;
 	}
+	else fill_c = TFT_CYAN;
+
+	debugI("Control: %d Focus: %d Active: %d", ctrl->key_id, focus, active);
+	tft.drawRect((ctrl->x) - 1, (ctrl->y) - 1, (ctrl->w) + 2, (ctrl->h) + 2, frame_c);	// Ramka
+	tft.drawRect((ctrl->x) - 2, (ctrl->y) - 2, (ctrl->w) + 4, (ctrl->h) + 4, frame_c);	// Ramka
+	tft.fillRect(ctrl->x, ctrl->y, ctrl->w, ctrl->h, fill_c);					// Wypelnienie
+	tft.setTextColor(txt_c);													// Tekst
+
+	if (active)	tft.drawString(ctrl->lbl_on, (ctrl->x) + 2, (ctrl->y) + 2);
+	else tft.drawString(ctrl->lbl_off, (ctrl->x) + 2, (ctrl->y) + 2);
 }
 
 void renderToolbar(enum TOOLBAR_ITEMS item)
@@ -1580,7 +1501,6 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			break;
 	}
 }
-
 void computeDistance()
 {
 	if (conf.getInt("imp_src") == 1)
@@ -1589,7 +1509,6 @@ void computeDistance()
 		distance2 = (pulses_cnt2 * 100) / calibration.dist_cal;
 	}
 }
-
 void computeSpeed()
 {
 	static uint8_t old_speed;
@@ -1604,7 +1523,6 @@ void computeSpeed()
 	}
 	else speed = gps.speed.kmph();
 }
-
 void computeVolt()
 {
 	static uint16_t old_volt;
@@ -1613,7 +1531,6 @@ void computeVolt()
 	volt = (volt + old_volt) / 2;												// Srednia z dwoch pomiarow
 	old_volt = volt;															// Zapamietaj poprzednia wartosc
 }
-
 uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
 {
 	uint8_t digit_pos = 0;
@@ -1629,20 +1546,25 @@ uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
 
 	return digit_pos;
 }
-
-void openDist() {clearWindow();}
-void openTime() {clearWindow();}
-void openNavi() {clearWindow();}
-void openCombo() {clearWindow();}
-void openGPS() {clearWindow();}
 void clearWindow()
 {
 	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
 	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
 }
-
-void btnStopStart(void) {}
-void btnSaveTrk(void) {}
-void btnSaveWpt(void) {}
-void btnNav2Wpt(void) {}
-void btnClrTimes(void) {}
+void tftMsg(String message)
+{
+	tft.fillRect(10, 40, 140, 40, TFT_BLACK);
+	tft.drawRect(10, 40, 140, 40, TFT_WHITE);
+	tft.drawCentreString(message, 80, 60, 1);
+	one_shoot.once_ms(2000, std::bind(renderScreen, screen));					// Przerysuj po 2s ekran
+}
+void openDist() {clearWindow();}
+void openTime() {clearWindow();}
+void openNavi() {clearWindow();}
+void openCombo() {clearWindow();}
+void openGPS() {clearWindow();}
+void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
+void btnSaveTrk(bool on_off) {}
+void btnSaveWpt(bool on_off) {}
+void btnNav2Wpt(bool on_off) {}
+void btnClrTimes(bool on_off) {}

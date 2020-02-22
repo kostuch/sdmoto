@@ -3,7 +3,6 @@
 #ifndef SDMOTO_H_
 #define SDMOTO_H_
 
-//#define HOST_NAME		"sdmoto18"												// Na potrzeby RemoteDebug
 #define HW_MAJOR_VER	1														// Wersja Hardware
 #define HW_MINOR_VER	0
 
@@ -24,20 +23,33 @@
 #define KEY_DN			6														// I2C bit
 #define KEY_RST			7														// I2C bit
 // EERAM adresy
-#define EERAM_BASE	0x0000														// Pierwszy adres w EERAM
-#define LAST_SCREEN	EERAM_BASE													// Ostatni ekran
-#define BRIGHTNESS	(LAST_SCREEN + 1)
-#define DIST1		(BRIGHTNESS + 2)											// Jasnosc ekranu
-#define DIST2		(DIST1 + 4)													// Dystans calkowity (impulsy lub dystans)
-#define LAST_WPT	(DIST2 + 4)													// Ostatni waypoint z listy do ktorego byla nawigacja
-#define DIST_CAL	(LAST_WPT + 2)												// Kalibracja dystansu
-#define VOLT_CAL	(DIST_CAL + 2)												// Kalibracja napiecia
-#define TEMP_CAL	(VOLT_CAL + 2)												// Kalibracja temperatury
+#define EERAM_BASE		0x0000													// Pierwszy adres w EERAM
+#define LAST_SCREEN		EERAM_BASE												// Ostatni ekran
+#define BRIGHTNESS		(LAST_SCREEN + 1)										// Jasnosc ekranu
+#define DIST1			(BRIGHTNESS + 2)										// Dystans odcinka
+#define DIST2			(DIST1 + 4)												// Dystans calkowity (impulsy lub dystans)
+#define LAST_WPT		(DIST2 + 4)												// Ostatni waypoint z listy do ktorego byla nawigacja
+#define DIST_CAL		(LAST_WPT + 2)											// Kalibracja dystansu
+#define VOLT_CAL		(DIST_CAL + 2)											// Kalibracja napiecia
+#define TEMP_CAL		(VOLT_CAL + 2)											// Kalibracja temperatury
 
-#define LONG_PRESS	500															// Czas dlugiego wcisniecia [ms]
-#define AP_TIMEOUT	10															// Czas na polaczenie z Access Pointem
-#define NUM_KEYS	4															// Ilosc przyciskow na ekranie
-#define SAVE_TIME	5															// Co 5 sekund zapis dystansow do pamieci
+// Koordynaty ikon na pasku
+// 160x128
+#define TBARX_GPS		0
+#define TBARX_WIFI		32
+#define TBARX_MEMORY	64
+#define TBARX_SD		96
+#define TBARX_TIME		128
+#define UTLY			32
+
+#define LONG_PRESS		500														// Czas dlugiego wcisniecia [ms]
+#define AP_TIMEOUT		10														// Czas na polaczenie z Access Pointem
+#define NUM_KEYS		4														// Ilosc przyciskow na ekranie
+#define SAVE_TIME		5														// Co 5 sekund zapis dystansow do pamieci
+
+#define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
+#define NAVI_SAVE_WPT	1
+#define NAVI_TO_WPT		2
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
@@ -53,11 +65,31 @@ typedef struct
 	uint16_t 	volt_cal;
 } cal_t;
 
+typedef struct
+{
+	uint8_t		screen_id;
+	uint8_t		key_id;
+	uint8_t		x, y, w, h;
+	char		*lbl_off;
+	char		*lbl_on;
+	void		(*key_exec)(bool on_off);
+} btn_t;
+
+typedef struct
+{
+	uint8_t screen_id;
+	char *screen_name;
+	void (*scr_open_exe)(void);
+	void (*scr_close_exe)(void);
+} screen_t;
+
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
+btn_t key_buf;
 bool connected;																	// Flaga WiFi
 bool internet;																	// Flaga dostepu do Internetu
 bool even_odd;																	// Parzysta/nieparzysta sekunda
 bool fix;																		// FIX GPS
+bool counter_disable;															// Flaga pauzy metromierza
 volatile bool pcf_signal;														// Flaga przerwania z expandera
 volatile bool imp_signal;														// Flaga przerwania z impulsu
 enum MUX_STATES mux_state;														// Stan multipleksera
@@ -73,7 +105,10 @@ uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lok
 uint8_t speed;																	// Predkosc
 uint16_t volt;																	// Napiecie
 uint32_t current_time;															// Czas stoperowy
+uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie
+uint8_t ctrl_state[5][2];														// 5 ekranow, pozycja ramki, nr aktywnej kontrolki
 
+void tftMsg(String message);
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
 void everySecTask(void);
 void mux_switch(enum MUX_STATES state);
@@ -88,6 +123,7 @@ void prevScr(void);
 void nextScr(void);
 void openScr(enum SCREENS scr);
 void (*closeScr)(void);
+void (*btnExe)(bool on_off);
 void renderToolbar(enum TOOLBAR_ITEMS item);
 void renderScreen(enum SCREENS scr);
 uint16_t eeram_read16(int16_t addr);
@@ -123,38 +159,42 @@ void openTime(void);
 void openNavi(void);
 void openCombo(void);
 void openGPS(void);
-void btnStopStart(void);
-void btnSaveTrk(void);
-void btnSaveWpt(void);
-void btnNav2Wpt(void);
-void btnClrTimes(void);
+void btnStopStart(bool on_off);
+void btnSaveTrk(bool on_off);
+void btnSaveWpt(bool on_off);
+void btnNav2Wpt(bool on_off);
+void btnClrTimes(bool on_off);
+void renderCtrl(btn_t *ctrl);
+
+const btn_t ctrls_data[] PROGMEM =
+{
+	{0, 0, 45, 110, 56, 12, (char *) "Zatrzymaj", (char *) "Uruchom", btnStopStart},
+	{1, 0, 70, 100, 80, 12, (char *) "Usun czasy", (char *) "OK", btnClrTimes},
+	{2, 0, 3, 35, 72, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
+	{2, 1, 3, 49, 72, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
+	{2, 2, 3, 63, 72, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
+};
+
+const screen_t screen_data[] PROGMEM =
+{
+	{0, (char *) "Metromierz", openDist, NULL},									// Metromierze
+	{1, (char *) "Stoper", openTime, NULL},										// Stoper
+	{2, (char *) "Nawigacja", openNavi, NULL},									// Nawigacja
+	{3, (char *) "Wskazniki", openCombo, NULL},									// Wskazniki
+	{4, (char *) "GPS", openGPS, NULL}											// GPS
+};
 /*
-
-#define IMP_DELAY		10														// Minimalny odstep miedzy zewnetrznymi impulsami
-
-#define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
-#define NAVI_SAVE_WPT	1
-#define NAVI_TO_WPT		2
-
 #define COMBO_CAL_DIST	0 														// Numer bitu - numer kontrolki
 #define COMBO_CAL_VOLT	1
 #define COMBO_CAL_TEMP	2
 
 bool changed_volt_cal;
 bool changed_temp_cal;
-uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie
 float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniecie)																				// Najstarszy bit ustawiony, jezeli kontrolka aktywna
 
-void save_device_config(void);
-void save_config_cb(void);
-void read_distances(void);
 void save_time(void);
-void volt_cal_up(void);
-void volt_cal_dn(void);
 void update_compass(uint16_t course);
 void make_trt_mtx(int16_t x, int16_t y, float phi);
 point_t mtx_mul_vec(float mtx[], point_t xy);
-void update_speed(uint8_t speed);
-void update_volt(uint8_t volt);
 */
 #endif /* SDMOTO_H_ */
