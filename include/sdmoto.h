@@ -170,9 +170,9 @@ const btn_t ctrls_data[] PROGMEM =
 {
 	{0, 0, 45, 110, 56, 12, (char *) "Zatrzymaj", (char *) "Uruchom", btnStopStart},
 	{1, 0, 70, 100, 80, 12, (char *) "Usun czasy", (char *) "OK", btnClrTimes},
-	{2, 0, 3, 35, 72, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
-	{2, 1, 3, 49, 72, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
-	{2, 2, 3, 63, 72, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
+	{2, 0, 3, 35, 74, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
+	{2, 1, 3, 49, 74, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
+	{2, 2, 3, 63, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
 };
 
 const screen_t screen_data[] PROGMEM =

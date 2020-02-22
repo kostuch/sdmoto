@@ -1138,8 +1138,6 @@ void keyShortPress(enum BUTTONS button)
 
 void keyLongPress(enum BUTTONS button)
 {
-	debugI("DLUGIE nacisniecie %d", button);
-
 	switch (button)
 	{
 		case BTN_RST:
