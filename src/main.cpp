@@ -19,14 +19,23 @@
 #include "TinyGPS++.h"
 #include "sdmoto.h"																// Konfiguracja kompilacji
 #include "icons.h"																// Definicje ikon
+#include "Gauge.h"																// Klasy wskaznikow
 
 Ticker				every_sec_tmr;												// Timer sekundowy
+Ticker 				timer_tmr;													// Timer stopera
 Ticker 				one_shoot;													// Timer jednorazowy
 RemoteDebug			Debug;														// Zdalny debug
 PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
 SerialRAM			eeram;														// EERAM
 TFT_eSPI 			tft = TFT_eSPI();											// Wyswietlacz TFT
 TinyGPSPlus			gps;														// GPS
+TinyGPSCustom		totalGPGSVMessages(gps, "GPGSV", 1);						// $GPGSV sentence, pierwszy element
+TinyGPSCustom		messageNumber(gps, "GPGSV", 2);								// $GPGSV sentence, drugi element
+TinyGPSCustom		satsInView(gps, "GPGSV", 3);								// $GPGSV sentence, trzeci element
+TinyGPSCustom		satNumber[4];												// Statystyki satelitow (cztery w kazdej sekwencji GPGSV)
+TinyGPSCustom		elevation[4];
+TinyGPSCustom		azimuth[4];
+TinyGPSCustom		snr[4];
 SdFat				sd;															// Karta SD
 File				dir;														// Katalog na SD
 File				file;														// Plik na SD
@@ -40,6 +49,18 @@ WiFiEventHandler	STAstationGotIPHandler;
 WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
+SimpleList<rect_t>	rect_list;
+// Predkosciomierz do 150km/h
+HGauge speed_gauge(&tft, 2, 64, 150, 16, TFT_BLACK, TFT_CYAN, TFT_GREENYELLOW, true, "km/h", 1, G_PLAIN, 0, 150);
+// Woltomierz 9-17V
+ARCGauge volt_gauge(&tft, 100, 100, 32, 32, TFT_BLACK, TFT_WHITE, TFT_WHITE, true, "V", 1, G_R2G, 9, 17);
+// Widoczne satelity
+HGauge satsv_gauge(&tft, 2, 34, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GOLD, true, "", 1, G_PLAIN, 0, MAX_SATS);
+// Uzywane do fixa satelity
+HGauge satsu_gauge(&tft, 2, 50, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GREEN, true, "", 1, G_PLAIN, 0, MAX_SATS);
+// Precyzja lokalizacji
+HGauge dop_gauge(&tft, 2, 66, 94, 16, TFT_BLACK, TFT_WHITE, TFT_CYAN, false, "HDOP", 1, G_R2G, 0, 99);
+
 uint16_t pwm_val = 0;
 
 #define SD_CS_PIN 0 															// Fake value dla SdFat
@@ -93,6 +114,7 @@ void setup()
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	openScr(screen);															// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
+	satCustomInit();															// Inicjalizacja statystyk satelitow
 	Serial.println("Koniec SETUP!");
 }
 
@@ -124,6 +146,8 @@ void loop()
 	if (connected) web_server.handleClient();									// Obsluga Web serwera
 
 	while (Serial.available()) gps.encode(Serial.read());						// Obsluga transmisji NMEA z GPS
+
+	if (totalGPGSVMessages.isUpdated()) satUpdateStats();						// Update statystyk satelitow po otrzymaniu informacji o 4 satelitach
 
 	if (connected) Debug.handle();												// Obsluga Remote Debug
 }
@@ -173,6 +197,7 @@ void mux_switch(enum MUX_STATES state)
 void everySecTask()
 {
 	static uint8_t save_time;
+	static int16_t old_course;
 	even_odd ^= 1;																// Co sekunde zmien flage
 	computeSpeed();																// Aktualizacja predkosci
 	computeVolt();																// Aktualizacja napiecia
@@ -194,12 +219,17 @@ void everySecTask()
 	}
 
 	//analogWrite(BL_PIN, pwm_val);												// DEBUG
-
 	//if (pwm_val < 1023) pwm_val += 200;
 	//else pwm_val = 0;
-	if (gps.date.isUpdated()) renderToolbar(GPS_DATETIME);						// Jezeli nowy czas z GPS
+	renderToolbar(GPS_DATETIME);												// Nowy czas z GPS
 
-	if (gps.location.isValid() && (gps.location.age() < 2000))					// Jezeli swierza lokalizacja
+	if (screen == SCR_COMBO) renderScreen(SCR_COMBO);
+
+	if (screen == SCR_NAVI) renderScreen(SCR_NAVI);
+
+	if (screen == SCR_GPS) renderScreen(SCR_GPS);
+
+	if (gps.location.isValid() && (gps.location.age() < 2000))					// Jezeli swieza lokalizacja
 	{
 		if (!fix)																// Jezeli go nie bylo
 		{
@@ -216,6 +246,13 @@ void everySecTask()
 		distance2 += dist;
 		old_lat = cur_lat;														// Zapamietaj lokalizacje jako stara
 		old_lon = cur_lon;
+
+		if (gps.course.isValid())												// Jezeli jest znany kurs
+		{
+			course = (int16_t) gps.course.deg();								// Nowy kurs
+
+			if (abs(course - old_course) > 4) new_course = true;				// Jezeli kurs sie zmienil o co najmniej 4 stopnie, ustaw flage
+		}
 	}
 	else
 	{
@@ -487,7 +524,7 @@ String SPIFFS_list()
 	else renderToolbar(MEM_FULL);
 
 	fs::Dir dir = SPIFFS.openDir("/");
-	String page = HTMLHeader();
+	String page = HTMLHeader(false);
 	page += F("<h3>Dostępne w pamięci pliki</h3>\n");
 
 	while (dir.next())
@@ -636,9 +673,9 @@ void update_started(void)
 	web_server.sendHeader(F("Connection"), F("close"));
 	web_server.sendHeader(F("Access-Control-Allow-Origin"), F("*"));
 	web_server.send(200, F("text/plain"), F("Czekaj na zakonczenie update..."));
-	debugI("Update started");
 	mux_switch(STARTUP);														// Wylaczenie sygnalu przerwan
 }
+
 void update_finished(void)
 {
 	tft.setCursor(32, TFT_HEIGHT / 2, 1);
@@ -673,7 +710,7 @@ void handleFWUpdate()
 		Serial.printf_P(PSTR("Available versions:\r\n%s\r\n"), new_fw.c_str());
 		SimpleList<uint32_t> fw_list;
 		uint8_t	r = 0;
-		String page = HTMLHeader();
+		String page = HTMLHeader(true);
 		page += F("<h1><strong>Dostępne wersje oprogramowania</strong></h1>\n"
 		          "<form action='/update_ver' method='POST'>\n"
 		          "<div>\n"
@@ -742,7 +779,7 @@ void handleFWUpdate2()
 
 void handleRoot()
 {
-	String page = HTMLHeader();
+	String page = HTMLHeader(true);
 	//for (size_t i = 0; i < sizeof(obrazek); i++) page += char(pgm_read_byte(obrazek + i));
 	page += F("<img src='/top.jpg' alt=''>");
 	page += F("<h3>Wersja software: ");
@@ -764,6 +801,7 @@ void handleConf()
 {
 	conf.handleFormRequest(&web_server);
 }
+
 void handleLogin()
 {
 	web_server.send(200, F("text/html"), F("<form action='/login_check'"
@@ -771,6 +809,7 @@ void handleLogin()
 	                                       "<input type='password' name='password' placeholder='Password'></br>"
 	                                       "<input type='submit' value='Login'></form><p>Try 'John Doe' and 'password123' ...</p>"));
 }
+
 void handleLogin2()
 {
 	if ( ! web_server.hasArg("username") || ! web_server.hasArg("password") ||
@@ -784,6 +823,7 @@ void handleLogin2()
 		web_server.send(200, "text/html", "<h1>Welcome, " + web_server.arg("username") + "!</h1><p>Login successful</p>");
 	else web_server.send(401, F("text/plain"), F("401: Unauthorized"));               // Username and password don't match
 }
+
 void startWebServer()
 {
 	//initWiFi();
@@ -877,7 +917,7 @@ String handleCalibration()
 {
 	if (web_server.hasArg("SAVE")) eeram_save16(DIST_CAL, calibration.dist_cal);
 
-	String page = HTMLHeader();
+	String page = HTMLHeader(false);
 	page += F("<p><h3>Kalibracja metromierza</h3></p>\n");
 	//Image to DataURL converter https://onlinecamscanner.com/image-to-dataurl
 	//for (size_t i = 0; i < sizeof(obrazek); i++) page += char(pgm_read_byte(obrazek + i));
@@ -892,7 +932,8 @@ String handleCalibration()
 	web_server.send(200, F("text/html"), page);
 	return page;
 }
-String HTMLHeader()
+
+String HTMLHeader(bool background)
 {
 	String h = F("<!DOCTYPE html>\n"
 	             "<html>\n"
@@ -902,12 +943,17 @@ String HTMLHeader()
 	             "<meta charset='utf-8'>\n"
 	             "<meta name='viewport' content='width=device-width, initial-scale=1'>\n"
 	             "<link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.4/css/bootstrap.min.css' >\n"
-	             "</head>\n"
-	             //"<body style='text-align: center;color: white; background: black;font-size: 1.5em;'>\n");
-	             "<body style='text-align: center;color: white; background: black;font-size: 1.5em; "
-	             "background-size: 100% 100vh; background-image: url(/logo_content.jpg)'>\n");
+	             "</head>\n");
+
+	if (background)
+		h += F("<body style='text-align: center;color: white; background: black;font-size: 1.5em; "
+		       "background-size: 100% 100vh; background-image: url(/logo_content.jpg)'>\n");
+	else
+		h += F("<body style='text-align: center;color: white; background: black;font-size: 1.5em;'>\n");
+
 	return h;
 }
+
 String HTMLFooter()
 {
 	String f = F("<p>SkeletonDevices &copy; 2020</p>"
@@ -1005,11 +1051,11 @@ void keyShortPress(enum BUTTONS button)
 				switch (screen)
 				{
 					case SCR_DIST:
-						if (conf.getInt("imp_src") == 0) distance1 = 0;				// Skasuj dystans odcinka
+						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
 						else
 						{
-							pulses_cnt1 = 0;										// Skasuj licznik impulsow
-							computeDistance();										// Przelicz dystanse
+							pulses_cnt1 = 0;									// Skasuj licznik impulsow
+							computeDistance();									// Przelicz dystanse
 						}
 
 						renderScreen(screen);									// Aktualizuj ekran
@@ -1019,13 +1065,16 @@ void keyShortPress(enum BUTTONS button)
 						if (timer_state == TMR_STOP)
 						{
 							timer_state = TMR_RUN;								// Uruchom stoper
-							current_time = 0;									// Wartosc poczatkowa
+							timer_tmr.attach_ms(45, std::bind(renderScreen, screen));
+							tmr_start_time = millis();							// Wartosc poczatkowa
 						}
 						else
 						{
+							timer_tmr.detach();
+							meantimeSave();										// Zapamietaj miedzyczas
+							tmr_start_time = millis();							// Wartosc poczatkowa - wyzerowanie stopera
+							renderScreen(SCR_TIME);								// Pokaz wyzerowany stoper
 							timer_state = TMR_STOP;								// Zatrzymaj stoper
-							//save_time();										// Zanotuj miedzyczas
-							current_time = 0;									// Skasuj czas
 						}
 
 						break;
@@ -1148,7 +1197,7 @@ void keyLongPress(enum BUTTONS button)
 				case SCR_COMBO:
 					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranow
 					{
-						if (conf.getInt("imp_src") == 0) distance2 = 0;			// Skasuj dystans odcinka
+						if (conf.getInt("imp_src") == 0) distance2 = 0;			// Skasuj dystans calkowity
 						else
 						{
 							pulses_cnt2 = 0;
@@ -1157,6 +1206,11 @@ void keyLongPress(enum BUTTONS button)
 
 						renderScreen(screen);									// Aktualizuj ekran
 					}
+
+					break;
+
+				case SCR_TIME:
+					if (timer_state == TMR_RUN)	meantimeSave();					// Zapamietaj miedzyczas
 
 					break;
 
@@ -1194,6 +1248,7 @@ void keyLongPress(enum BUTTONS button)
 			break;
 	}
 }
+
 void prevScr()
 {
 	switch (screen)
@@ -1244,6 +1299,7 @@ void prevScr()
 
 	openScr(screen);
 }
+
 void nextScr()
 {
 	switch (screen)
@@ -1295,6 +1351,7 @@ void nextScr()
 
 	openScr(screen);
 }
+
 void openScr(enum SCREENS scr)
 {
 	if (closeScr) closeScr();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)
@@ -1318,6 +1375,16 @@ void openScr(enum SCREENS scr)
 		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk do listy jezeli nalezy do ekranu
 	}
 
+	/*
+		// Alternatywna metoda definiowania geometrii kontrolekk w pliku na SPIFFS
+		uint8_t count;
+		memcpy_P(&count, &ctrls_num[screen][2], 1);
+		for (size_t i = 0; i < count; i++)
+		{
+			rect_t ctrl = readCtrlDimensions(screen, i);
+			rect_list.push_back(ctrl);
+		}
+	*/
 	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
 
 	for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)						// Rysuj kontrolki
@@ -1334,7 +1401,11 @@ void openScr(enum SCREENS scr)
 void renderScreen(enum SCREENS scr)
 {
 	static uint32_t old_distance1, old_distance2;
+	static uint8_t old_secs, old_mins, old_hrs;
+	static bool secs10_flag;													// Flaga zwiekszenia dziesiatek sekund
+	static bool mins10_flag;													// Flaga zwiekszenia dziesiatek minut
 	uint8_t cursor_pos;
+	uint8_t sats_on_sky = 0;
 
 	switch (scr)
 	{
@@ -1386,9 +1457,119 @@ void renderScreen(enum SCREENS scr)
 			break;
 
 		case SCR_TIME:
+			if (timer_state == TMR_RUN)
+			{
+				computeTime();
+
+				if (!(tmr_secs % 10)) secs10_flag = true;						// Jezeli sekundy podzielne przez 10 bez reszty, to nowe dziesiatki
+				else secs10_flag = false;										// Albo nie
+
+				if (!(tmr_mins % 10)) mins10_flag = true;						// Jezeli minuty podzielne przez 10 bez reszty, to nowe dziesiatki
+				else mins10_flag = false;										// Albo nie
+
+				tft.setTextSize(2);												// Podwojna wielkosc znaku
+				tft.setTextColor(TFT_WHITE, TFT_BLACK);
+				tft.setCursor(160 - (3 * 12), 36);
+				tft.printf("%02d", tmr_frac);									// Ulamki
+
+				if (old_secs != tmr_secs)										// Jezeli uplynela nastepna sekunda
+				{
+					if (secs10_flag)											// Renderuj sekundy dwucyfrowe
+					{
+						tft.setCursor(160 - (6 * 12), 36);
+						tft.printf("%02d", tmr_secs);
+					}
+					else														// Renderuj sekundy jednocyfrowe
+					{
+						tft.setCursor(160 - (5 * 12), 36);
+						tft.printf("%d", tmr_secs % 10);
+					}
+				}
+
+				if (old_mins != tmr_mins)										// Jezeli uplynela nastepna minuta
+				{
+					if (mins10_flag)											// Renderuj minuty dwucyfrowe
+					{
+						tft.setCursor(160 - (9 * 12), 36);
+						tft.printf("%02d", tmr_mins);
+					}
+					else														// Renderuj minuty jednocyfrowe
+					{
+						tft.setCursor(160 - (8 * 12), 36);
+						tft.printf("%d", tmr_mins % 10);
+					}
+				}
+
+				if (old_hrs != tmr_hrs)											// Renderuj godziny
+				{
+					tft.setCursor(160 - (12 * 12), 36);
+					tft.printf("%02d", tmr_hrs);
+				}
+
+				tft.setTextSize(1);
+				old_hrs = tmr_hrs;
+				old_mins = tmr_mins;
+				old_secs = tmr_secs;
+			}
+
+			break;
+
 		case SCR_NAVI:
+			break;
+
 		case SCR_COMBO:
+			break;
+
 		case SCR_GPS:
+			satsu_gauge.update(gps.satellites.value());							// Sledzone satelity
+
+			if (sat_stats_ready)												// Jezeli sa nowe statystyki
+			{
+				for (size_t i = 0; i < MAX_SATS; i++)
+				{
+					if (sats_stats[i].prn) sats_on_sky++;
+				}
+
+				sat_stats_ready = false;										// Skasuj flage aktualnych statystyk
+			}
+
+			satsv_gauge.update(sats_on_sky);									// Widoczne satelity
+			dop_gauge.update(MAX_DOP - gps.hdop.hdop());						// Precyzja lokalizacji
+
+			if (new_course)														// Nowy kurs
+			{
+				renderCompassNeedle(course, (point_t) {COMPASS_X, COMPASS_Y}, COMPASS_R);			// Przerysuj kompas
+				tft.fillRect(120, 100, 24, 16, TFT_BLACK);						// Zamaz stary kurs
+				tft.setCursor(120, 100);										// Napisz pod kompasem kurs
+				tft.printf_P("%d", (int) gps.course.deg());
+				tft.setCursor(120, 108);
+				tft.print(gps.cardinal(course));
+				new_course = false;												// Skasuj flage
+			}
+
+			if (gps.location.isUpdated())
+			{
+				tft.setCursor(4 + 7*6, 84);
+				tft.printf_P("%03.5f", gps.location.lat());
+				tft.setCursor(4 + 7*6, 92);
+				tft.printf_P("%03.5f", gps.location.lng());
+			}
+
+			if (gps.altitude.isUpdated())
+			{
+				tft.setCursor(4, 100);
+				tft.printf_P("Alt: %4d", (int) gps.altitude.meters());
+			}
+
+			if (gps.speed.isUpdated())
+			{
+				tft.setCursor(4, 108);
+				tft.printf_P("Spd:  %3d", (int) gps.speed.kmph());
+			}
+
+			tft.setCursor(4, 116);
+			tft.printf_P("FIX:  %3d", gps.location.age() < 999000 ? gps.location.age() / 1000 : 0);
+	
 			break;
 
 		default:
@@ -1499,6 +1680,7 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			break;
 	}
 }
+
 void computeDistance()
 {
 	if (conf.getInt("imp_src") == 1)
@@ -1507,6 +1689,7 @@ void computeDistance()
 		distance2 = (pulses_cnt2 * 100) / calibration.dist_cal;
 	}
 }
+
 void computeSpeed()
 {
 	static uint8_t old_speed;
@@ -1521,6 +1704,7 @@ void computeSpeed()
 	}
 	else speed = gps.speed.kmph();
 }
+
 void computeVolt()
 {
 	static uint16_t old_volt;
@@ -1529,6 +1713,17 @@ void computeVolt()
 	volt = (volt + old_volt) / 2;												// Srednia z dwoch pomiarow
 	old_volt = volt;															// Zapamietaj poprzednia wartosc
 }
+
+void computeTime()
+{
+	tmr_ms = millis() - tmr_start_time;											// Różnica w milisekundach miedzy teraz a startem
+	tmr_sec_num = tmr_ms / 1000;												// Sekundy odliczone od startu
+	tmr_hrs = tmr_sec_num / 3600;												// Uplynelo godzin
+	tmr_mins = (tmr_sec_num - (tmr_hrs * 3600)) / 60;							// Minut
+	tmr_secs = tmr_sec_num - (tmr_hrs * 3600) - (tmr_mins * 60);				// I sekund
+	tmr_frac = (tmr_ms % 1000) / 10;											// Ulamki sekundy
+}
+
 uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
 {
 	uint8_t digit_pos = 0;
@@ -1544,11 +1739,13 @@ uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
 
 	return digit_pos;
 }
+
 void clearWindow()
 {
 	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
 	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
 }
+
 void tftMsg(String message)
 {
 	tft.fillRect(10, 40, 140, 40, TFT_BLACK);
@@ -1556,13 +1753,217 @@ void tftMsg(String message)
 	tft.drawCentreString(message, 80, 60, 1);
 	one_shoot.once_ms(2000, std::bind(renderScreen, screen));					// Przerysuj po 2s ekran
 }
+
 void openDist() {clearWindow();}
-void openTime() {clearWindow();}
+
+void openTime()
+{
+	clearWindow();
+	tft.setTextSize(2);															// Podwojna wielkosc znaku
+	tft.setTextColor(TFT_WHITE, TFT_BLACK);
+	tft.setCursor(160 - (12 * 12), 36);
+
+	if (timer_state == TMR_RUN)
+	{
+		computeTime();
+		tft.printf("%02d:%02d:%02d.00", tmr_hrs, tmr_mins, tmr_secs);
+	}
+	else tft.printf("00:00:00.00");
+
+	if (timer_state == TMR_RUN) timer_tmr.attach_ms(45, std::bind(renderScreen, screen));			// Przerysuj po 50ms ekran
+
+	tft.setTextSize(1);
+}
+
+void closeTime()
+{
+	if (timer_state == TMR_RUN) timer_tmr.detach();								// Wylacz odswierzanie ekranu stopera
+}
+
+void meantimeSave(void)
+{
+	static uint8_t positions;													// Pierwszy miedzyczas
+	tft.setTextSize(1);
+	tft.setCursor(5, 36 + 20 + ((positions % 8) * 8));							// Po 8 zapisach nadpisuje od nowa
+	tft.setTextColor(TFT_WHITE, TFT_BLACK);
+	tft.printf("%02d ", ++positions);
+	tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+	tft.printf("%02d:%02d:%02d.%02d", tmr_hrs, tmr_mins, tmr_secs, tmr_frac);
+}
+
 void openNavi() {clearWindow();}
 void openCombo() {clearWindow();}
-void openGPS() {clearWindow();}
+void openGPS()
+{
+	clearWindow();
+	satsv_gauge.show();
+	satsu_gauge.show();
+	dop_gauge.show();
+	tft.drawCircle(COMPASS_X, COMPASS_Y, COMPASS_R, TFT_WHITE);					// Okrag kompasu
+	tft.setTextColor(TFT_WHITE, TFT_BLACK);
+	tft.setCursor(4, 84);
+	tft.printf_P("Lat: N %03.5f", gps.location.lat());
+	tft.setCursor(4, 92);
+	tft.printf_P("Lon: E %03.5f", gps.location.lng());
+	tft.setCursor(4, 100);
+	tft.printf_P("Alt: %4d m", (int) gps.altitude.meters());
+	tft.setCursor(4, 108);
+	tft.printf_P("Spd:  %3d km/h", (int) gps.speed.kmph());
+	tft.setCursor(4, 116);
+	tft.printf_P("FIX:  %3d s", gps.location.age() < 999000 ? gps.location.age() / 1000 : 0);
+
+	if (gps.course.isValid())
+	{
+		tft.setCursor(120, 100);
+		tft.printf_P("%d", (int) gps.course.deg());
+		tft.setCursor(120, 108);
+		tft.print(gps.cardinal(course));
+	}
+}
+
+void satCustomInit()
+{
+	for (uint8_t i = 0; i < 4; ++i)												// Inicjalizacja statystyk satelitow
+	{
+		satNumber[i].begin(gps, "GPGSV", 4 + 4 * i);							// offsets 4, 8, 12, 16
+		elevation[i].begin(gps, "GPGSV", 5 + 4 * i);							// offsets 5, 9, 13, 17
+		azimuth[i].begin(gps, "GPGSV", 6 + 4 * i);								// offsets 6, 10, 14, 18
+		snr[i].begin(gps, "GPGSV", 7 + 4 * i);									// offsets 7, 11, 15, 19
+	}
+}
 void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
 void btnSaveTrk(bool on_off) {}
 void btnSaveWpt(bool on_off) {}
 void btnNav2Wpt(bool on_off) {}
 void btnClrTimes(bool on_off) {}
+
+void satUpdateStats()
+{
+	/*
+	GPS Satellites in view
+	$GPGSV,3,1,11,03,03,111,00,04,15,270,00,06,01,010,00,13,06,292,00*74
+	$GPGSV,3,2,11,14,25,170,00,16,57,208,39,18,67,296,40,19,40,246,00*74
+	$GPGSV,3,3,11,22,42,067,42,24,14,311,43,27,05,244,00,,,,*4D
+	1    = Total number of messages of this type in this cycle
+	2    = Message number
+	3    = Total number of SVs in view
+	4    = SV PRN number
+	5    = Elevation in degrees, 90 maximum
+	6    = Azimuth, degrees from true north, 000 to 359
+	7    = SNR, 00-99 dB (null when not tracking)
+	8-11 = Information about second SV, same as field 4-7
+	12-15= Information about third SV, same as field 4-7
+	16-19= Information about fourth SV, same as field 4-7
+	*/
+	static uint8_t slot = 0;
+	static sat_t sats_temp[MAX_SATS];											// Tablica parametrow sygnalu z satelitow (tymczasowa)
+	uint8_t totalMessages = atoi(totalGPGSVMessages.value());					// Calkowita ilosc sentencji GPGSV
+	uint8_t currentMessage = atoi(messageNumber.value());						// Kolejny numer sentencji GPGSV
+
+	// Cztery komplety danych w sentencji GPGSV lub mniej w ostatniej sekwencji
+	for (uint8_t i = 0; currentMessage < totalMessages ? i < 4 : i < (atoi(satsInView.value()) % 4); ++i)
+	{
+		uint8_t sat_prn = atoi(satNumber[i].value());
+
+		if (sat_prn)															// Jezeli jest satelita
+		{
+			sats_temp[slot].prn = sat_prn;										// Zapisz dane
+			sats_temp[slot].elevation = atoi(elevation[i].value());
+			sats_temp[slot].azimuth = atoi(azimuth[i].value());
+			sats_temp[slot].snr = atoi(snr[i].value());
+
+			// Jezeli SNR > 0, i ustawiony azymut i elewacja, to satelita jest sledzony (uzywany do fixa)
+			if (sats_temp[slot].snr && sats_temp[slot].elevation && sats_temp[slot].azimuth) sats_temp[slot].active = true;
+			else sats_temp[slot].active = false;
+
+			slot++;																// Kolejny zestaw danych
+		}
+	}
+
+	if (totalMessages == currentMessage)										// Jezeli otrzymano komplet sentencji GPGSV
+	{
+		memcpy(sats_stats, sats_temp, sizeof(sats_temp));						// Kopiuj do bufora
+		sat_stats_ready = true;													// Statystyki aktualne
+
+		for (uint8_t i = 0; i < MAX_SATS; ++i) sats_temp[i].prn = 0;			// Wyzeruj informacje o satelitach
+
+		slot = 0;
+	}
+}
+
+void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r)
+{
+	static point_t n, s, w, e;
+	make_trt_mtx(xy, -course * 0.0175);											// Ujemne radiany
+	//make_trt_mtx((point_t) {COMPASS_X, COMPASS_Y}, -course * 0.0175);			// Ujemne radiany
+	tft.fillTriangle(n.x, n.y, e.x, e.y, w.x, w.y, TFT_BLACK);					// Zamaz poprzednie wskazanie kompasu
+	tft.fillTriangle(s.x, s.y, e.x, e.y, w.x, w.y, TFT_BLACK);
+	n = mtx_mul_vec(*trt_mtx, (point_t) {xy.x, xy.y - r + 2});					// Oblicz polozenie "igly kompasu"
+	e = mtx_mul_vec(*trt_mtx, (point_t) {xy.x + 6, xy.y});
+	w = mtx_mul_vec(*trt_mtx, (point_t) {xy.x - 6, xy.y});
+	s = mtx_mul_vec(*trt_mtx, (point_t) {xy.x, xy.y + r - 2});
+	tft.fillTriangle(n.x, n.y, e.x, e.y, w.x, w.y, TFT_RED);					// Nowe wskazanie kompasu (czerwona igla)
+	tft.fillTriangle(s.x, s.y, e.x, e.y, w.x, w.y, TFT_WHITE);					// Biala igla
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Macierze https://eduinf.waw.pl/inf/utils/002_roz/2008_21.php
+////////////////////////////////////////////////////////////////////////////////
+void make_trt_mtx(point_t xy, float phi)
+{
+	// Tworzy macierz rotacji wokol punktu (x, y)
+	// phi - kat obrotu w radianach
+	// [ cos(phi)                            sin(phi)         0 ]
+	// [ -sin(phi)                           cos(phi)         0 ]
+	// [ x(1-cos(phi))+y*sin(phi)  -x*sin(phi)+y(1-cos(phi))  1 ]
+	// Dla phi=0 jest to macierz translacji
+	// Dla x=y=0 jest to macierz obrotu wokol poczatku ukladu wspolrzednych
+	trt_mtx[0][0] = cos(phi);
+	trt_mtx[1][1] = trt_mtx[0][0];
+	trt_mtx[0][1] = sin(phi);
+	trt_mtx[1][0] = -trt_mtx[0][1];
+	trt_mtx[2][0] = (xy.x * (1 - cos(phi))) + (xy.y * sin(phi));
+	trt_mtx[2][1] = (-xy.x * sin(phi)) + (xy.y * (1 - cos(phi)));
+}
+
+point_t mtx_mul_vec(float mtx[], point_t xy)
+{
+	// Macierz B musi posiadac tyle wierszy, ile kolumn posiada macierz A.
+	// Macierz wynikowa C posiada tyle wierszy, ile posiada macierz A oraz tyle kolumn, ile posiada macierz B
+	//                           [1  2  3]
+	// [x', y', 1] = [x, y, 1] * [4  5  6]
+	//                           [7  8  9]
+	// x' = x*1 + y*4 + 1*7
+	// y' = x*2 + y*5 + 1*8
+	// 1 = 1
+	point_t point;
+	point.x = xy.x * mtx[0] + xy.y * mtx[3] + mtx[6];
+	point.y = xy.x * mtx[1] + xy.y * mtx[4] + mtx[7];
+	return point;
+}
+
+rect_t readCtrlDimensions(uint8_t scr_id, uint8_t ctrl_id)
+{
+	SPIFFS_file = SPIFFS.open("/gui.conf", "r");								// Plik z definicjami kontrolek
+	char *result;
+	rect_t dimension = {0, 0, 0, 0};
+	char buf[32];
+
+	while (SPIFFS_file.available())												// Dopoki nie jest koniec danych
+	{
+		SPIFFS_file.readBytesUntil('\n', buf, sizeof(buf));						// Czytaj linie do bufora
+		result = strtok(buf, ",");
+
+		if (atoi(result) != scr_id) continue;									// Jezeli nie zgadza sie ekran, to nastepny rekord
+
+		if (atoi(strtok(NULL, ",")) != ctrl_id) continue;						// Jezeli nie zgadza sie kontrolka, to nastepny rekord
+
+		dimension.x = atoi(strtok(NULL, ","));									// Rozmiary kontrolki
+		dimension.y = atoi(strtok(NULL, ","));
+		dimension.w = atoi(strtok(NULL, ","));
+		dimension.h = atoi(strtok(NULL, ","));
+	}
+
+	SPIFFS_file.close();
+	return dimension;
+}

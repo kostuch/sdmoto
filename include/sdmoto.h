@@ -41,11 +41,16 @@
 #define TBARX_SD		96
 #define TBARX_TIME		128
 #define UTLY			32
+#define COMPASS_X		127
+#define COMPASS_Y		64
+#define COMPASS_R		30
 
 #define LONG_PRESS		500														// Czas dlugiego wcisniecia [ms]
 #define AP_TIMEOUT		10														// Czas na polaczenie z Access Pointem
 #define NUM_KEYS		4														// Ilosc przyciskow na ekranie
 #define SAVE_TIME		5														// Co 5 sekund zapis dystansow do pamieci
+#define MAX_SATS		20														// Maksymalna liczba widzianych satelitow
+#define MAX_DOP			100														// Najgorsza precyzja
 
 #define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
 #define NAVI_SAVE_WPT	1
@@ -59,6 +64,11 @@ enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigac
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
 
+typedef struct
+{
+	int		x;
+	int		y;
+} point_t;
 typedef struct
 {
 	uint16_t 	dist_cal;
@@ -83,12 +93,29 @@ typedef struct
 	void (*scr_close_exe)(void);
 } screen_t;
 
-const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
+typedef struct
+{
+	uint8_t x;
+	uint8_t y;
+	uint8_t w;
+	uint8_t h;
+} rect_t;
+
+typedef struct
+{
+	uint8_t		prn;
+	bool		active;
+	uint8_t		elevation;
+	uint16_t	azimuth;
+	uint8_t		snr;
+} sat_t;
+
 btn_t key_buf;
 bool connected;																	// Flaga WiFi
 bool internet;																	// Flaga dostepu do Internetu
 bool even_odd;																	// Parzysta/nieparzysta sekunda
 bool fix;																		// FIX GPS
+bool sat_stats_ready;															// Statystyki satelitow gotowe
 bool counter_disable;															// Flaga pauzy metromierza
 volatile bool pcf_signal;														// Flaga przerwania z expandera
 volatile bool imp_signal;														// Flaga przerwania z impulsu
@@ -104,10 +131,19 @@ uint32_t distance1, distance2;													// Dystanse (odcinka i globalny)
 uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lokalizacja
 uint8_t speed;																	// Predkosc
 uint16_t volt;																	// Napiecie
-uint32_t current_time;															// Czas stoperowy
+uint32_t tmr_start_time;														// Czas stoperowy
 uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie
 uint8_t ctrl_state[5][2];														// 5 ekranow, pozycja ramki, nr aktywnej kontrolki
+uint32_t tmr_ms;																// Liczba milisekund stopera
+uint32_t tmr_sec_num;															// Liczba sekund stopera
+uint8_t tmr_hrs, tmr_mins, tmr_secs, tmr_frac;									// Stoper: godziny, minuty, sekundy, ulamki
+sat_t sats_stats[MAX_SATS];														// Tabela parametrow satelitow
+float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniecie)
+uint16_t course;																// Aktualny kurs wg gps
+bool new_course;																// Flaga nowego kursu
 
+void make_trt_mtx(point_t xy, float phi);
+point_t mtx_mul_vec(float *mtx, point_t xy);
 void tftMsg(String message);
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
 void everySecTask(void);
@@ -147,11 +183,12 @@ String handleCalibration(void);
 String SPIFFS_list(void);
 void SD_list(void);
 String getContentType(String filename);
-String HTMLHeader(void);
+String HTMLHeader(bool background);
 String HTMLFooter(void);
 void computeDistance(void);
 void computeSpeed(void);
 void computeVolt(void);
+void computeTime(void);
 uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length);
 void clearWindow(void);
 void openDist(void);
@@ -159,12 +196,20 @@ void openTime(void);
 void openNavi(void);
 void openCombo(void);
 void openGPS(void);
+void closeTime(void);
 void btnStopStart(bool on_off);
 void btnSaveTrk(bool on_off);
 void btnSaveWpt(bool on_off);
 void btnNav2Wpt(bool on_off);
 void btnClrTimes(bool on_off);
 void renderCtrl(btn_t *ctrl);
+void meantimeSave(void);
+void satUpdateStats(void);
+rect_t readCtrlDimensions(uint8_t scr_id, uint8_t ctrl_id);
+void satCustomInit(void);
+void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r);
+
+const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 
 const btn_t ctrls_data[] PROGMEM =
 {
@@ -175,10 +220,19 @@ const btn_t ctrls_data[] PROGMEM =
 	{2, 2, 3, 63, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
 };
 
+/*
+const uint8_t ctrls_num[][2] PROGMEM =
+{
+	{0, 0},
+	{1, 1},
+	{2, 3}
+}; 
+*/
+
 const screen_t screen_data[] PROGMEM =
 {
 	{0, (char *) "Metromierz", openDist, NULL},									// Metromierze
-	{1, (char *) "Stoper", openTime, NULL},										// Stoper
+	{1, (char *) "Stoper", openTime, closeTime},								// Stoper
 	{2, (char *) "Nawigacja", openNavi, NULL},									// Nawigacja
 	{3, (char *) "Wskazniki", openCombo, NULL},									// Wskazniki
 	{4, (char *) "GPS", openGPS, NULL}											// GPS
@@ -192,7 +246,6 @@ bool changed_volt_cal;
 bool changed_temp_cal;
 float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniecie)																				// Najstarszy bit ustawiony, jezeli kontrolka aktywna
 
-void save_time(void);
 void update_compass(uint16_t course);
 void make_trt_mtx(int16_t x, int16_t y, float phi);
 point_t mtx_mul_vec(float mtx[], point_t xy);
