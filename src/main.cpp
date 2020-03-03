@@ -59,7 +59,7 @@ HGauge satsv_gauge(&tft, 2, 34, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GOLD, true, ""
 // Uzywane do fixa satelity
 HGauge satsu_gauge(&tft, 2, 50, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GREEN, true, "", 1, G_PLAIN, 0, MAX_SATS);
 // Precyzja lokalizacji
-HGauge dop_gauge(&tft, 2, 66, 94, 16, TFT_BLACK, TFT_WHITE, TFT_CYAN, false, "HDOP", 1, G_R2G, 0, 99);
+HGauge dop_gauge(&tft, 2, 66, 94, 16, TFT_BLACK, TFT_WHITE, TFT_CYAN, false, "HDOP", 1, G_R2G, 0, MAX_DOP - 1);
 
 uint16_t pwm_val = 0;
 
@@ -1065,7 +1065,7 @@ void keyShortPress(enum BUTTONS button)
 						if (timer_state == TMR_STOP)
 						{
 							timer_state = TMR_RUN;								// Uruchom stoper
-							timer_tmr.attach_ms(45, std::bind(renderScreen, screen));
+							timer_tmr.attach_ms(TIMER_REFRESH, std::bind(renderScreen, screen));
 							tmr_start_time = millis();							// Wartosc poczatkowa
 						}
 						else
@@ -1538,10 +1538,10 @@ void renderScreen(enum SCREENS scr)
 
 			if (new_course)														// Nowy kurs
 			{
-				renderCompassNeedle(course, (point_t) {COMPASS_X, COMPASS_Y}, COMPASS_R);			// Przerysuj kompas
+				renderCompassNeedle(course, (point_t) {COMPASS_X, COMPASS_Y}, COMPASS_R);			// Przerysuj igle kompasu
 				tft.fillRect(120, 100, 24, 16, TFT_BLACK);						// Zamaz stary kurs
 				tft.setCursor(120, 100);										// Napisz pod kompasem kurs
-				tft.printf_P("%d", (int) gps.course.deg());
+				tft.printf_P("%d%c", (int) gps.course.deg(), 247);				// Symbol stopni
 				tft.setCursor(120, 108);
 				tft.print(gps.cardinal(course));
 				new_course = false;												// Skasuj flage
@@ -1549,27 +1549,26 @@ void renderScreen(enum SCREENS scr)
 
 			if (gps.location.isUpdated())
 			{
-				tft.setCursor(4 + 7*6, 84);
+				tft.setCursor(4 + 7 * 6, 84);									// Tylko wartosc, wiec przesuniety kursor
 				tft.printf_P("%03.5f", gps.location.lat());
-				tft.setCursor(4 + 7*6, 92);
+				tft.setCursor(4 + 7 * 6, 92);									// Tylko wartosc, wiec przesuniety kursor
 				tft.printf_P("%03.5f", gps.location.lng());
 			}
 
 			if (gps.altitude.isUpdated())
 			{
-				tft.setCursor(4, 100);
-				tft.printf_P("Alt: %4d", (int) gps.altitude.meters());
+				tft.setCursor(4 + 5 *6, 100);									// Tylko wartosc, wiec przesuniety kursor
+				tft.printf_P("%4d", (int) gps.altitude.meters());
 			}
 
 			if (gps.speed.isUpdated())
 			{
-				tft.setCursor(4, 108);
-				tft.printf_P("Spd:  %3d", (int) gps.speed.kmph());
+				tft.setCursor(4 + 6 * 6, 108);									// Tylko wartosc, wiec przesuniety kursor
+				tft.printf_P("%3d", (int) gps.speed.kmph());
 			}
 
-			tft.setCursor(4, 116);
-			tft.printf_P("FIX:  %3d", gps.location.age() < 999000 ? gps.location.age() / 1000 : 0);
-	
+			tft.setCursor(4 + 6 * 6, 116);										// Tylko wartosc, wiec przesuniety kursor
+			tft.printf_P("%3d", gps.location.age() < 999000 ? gps.location.age() / 1000 : 0);
 			break;
 
 		default:
@@ -1756,6 +1755,8 @@ void tftMsg(String message)
 
 void openDist() {clearWindow();}
 
+void closeDist() {tft.setTextFont(1);}
+
 void openTime()
 {
 	clearWindow();
@@ -1770,7 +1771,7 @@ void openTime()
 	}
 	else tft.printf("00:00:00.00");
 
-	if (timer_state == TMR_RUN) timer_tmr.attach_ms(45, std::bind(renderScreen, screen));			// Przerysuj po 50ms ekran
+	if (timer_state == TMR_RUN) timer_tmr.attach_ms(TIMER_REFRESH, std::bind(renderScreen, screen));// Przerysuj po 50ms ekran
 
 	tft.setTextSize(1);
 }
@@ -1792,7 +1793,15 @@ void meantimeSave(void)
 }
 
 void openNavi() {clearWindow();}
-void openCombo() {clearWindow();}
+void openCombo()
+{
+	clearWindow();
+	tft.setTextColor(TFT_WHITE, TFT_BLACK);
+	tft.setCursor(0, 32);
+
+	for (size_t i = 0; i < 256; i++) tft.print(char(i));
+}
+
 void openGPS()
 {
 	clearWindow();
@@ -1815,7 +1824,7 @@ void openGPS()
 	if (gps.course.isValid())
 	{
 		tft.setCursor(120, 100);
-		tft.printf_P("%d", (int) gps.course.deg());
+		tft.printf_P("%d%c", (int) gps.course.deg(), 247);						// 247 - kod ASCII stopni
 		tft.setCursor(120, 108);
 		tft.print(gps.cardinal(course));
 	}

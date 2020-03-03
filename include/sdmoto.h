@@ -50,7 +50,8 @@
 #define NUM_KEYS		4														// Ilosc przyciskow na ekranie
 #define SAVE_TIME		5														// Co 5 sekund zapis dystansow do pamieci
 #define MAX_SATS		20														// Maksymalna liczba widzianych satelitow
-#define MAX_DOP			100														// Najgorsza precyzja
+#define MAX_DOP			10														// Najgorsza precyzja [m]
+#define TIMER_REFRESH	55														// Czas odswiezania stopera [ms]
 
 #define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
 #define NAVI_SAVE_WPT	1
@@ -197,6 +198,7 @@ void openNavi(void);
 void openCombo(void);
 void openGPS(void);
 void closeTime(void);
+void closeDist(void);
 void btnStopStart(bool on_off);
 void btnSaveTrk(bool on_off);
 void btnSaveWpt(bool on_off);
@@ -231,7 +233,7 @@ const uint8_t ctrls_num[][2] PROGMEM =
 
 const screen_t screen_data[] PROGMEM =
 {
-	{0, (char *) "Metromierz", openDist, NULL},									// Metromierze
+	{0, (char *) "Metromierz", openDist, closeDist},							// Metromierze
 	{1, (char *) "Stoper", openTime, closeTime},								// Stoper
 	{2, (char *) "Nawigacja", openNavi, NULL},									// Nawigacja
 	{3, (char *) "Wskazniki", openCombo, NULL},									// Wskazniki
