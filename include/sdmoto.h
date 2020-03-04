@@ -74,6 +74,7 @@ typedef struct
 {
 	uint16_t 	dist_cal;
 	uint16_t 	volt_cal;
+	uint16_t 	temp_cal;
 } cal_t;
 
 typedef struct

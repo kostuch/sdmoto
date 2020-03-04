@@ -51,15 +51,17 @@ WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
 SimpleList<rect_t>	rect_list;
 // Predkosciomierz do 150km/h
-HGauge speed_gauge(&tft, 2, 64, 150, 16, TFT_BLACK, TFT_CYAN, TFT_GREENYELLOW, true, "km/h", 1, G_PLAIN, 0, 150);
-// Woltomierz 9-17V
-ARCGauge volt_gauge(&tft, 100, 100, 32, 32, TFT_BLACK, TFT_WHITE, TFT_WHITE, true, "V", 1, G_R2G, 9, 17);
+HGauge speed_gauge(&tft, 2, 66, 96, 16, TFT_BLACK, TFT_WHITE, TFT_RED, false, "", 1, G_PLAIN, 0, 150);
+// Woltomierz 10-16V
+HGauge volt_gauge(&tft, 2, 84, 96, 16, TFT_BLACK, TFT_WHITE, TFT_BLUE, false, "", 1, G_R2G, 10, 16);
+// Termometr 0-100 stopni
+HGauge temp_gauge(&tft, 2, 102, 96, 16, TFT_BLACK, TFT_WHITE, TFT_BLUE, false, "", 1, G_M_B2R, 0, 100);
 // Widoczne satelity
 HGauge satsv_gauge(&tft, 2, 34, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GOLD, true, "", 1, G_PLAIN, 0, MAX_SATS);
 // Uzywane do fixa satelity
 HGauge satsu_gauge(&tft, 2, 50, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GREEN, true, "", 1, G_PLAIN, 0, MAX_SATS);
 // Precyzja lokalizacji
-HGauge dop_gauge(&tft, 2, 66, 94, 16, TFT_BLACK, TFT_WHITE, TFT_CYAN, false, "HDOP", 1, G_R2G, 0, MAX_DOP - 1);
+HGauge dop_gauge(&tft, 2, 66, 94, 16, TFT_BLACK, TFT_WHITE, TFT_CYAN, false, "HDOP", 1, G_M_R2G, 0, MAX_DOP - 1);
 
 uint16_t pwm_val = 0;
 
@@ -108,6 +110,7 @@ void setup()
 	delay(2000);																// Chwila...
 	calibration.dist_cal = eeram_read16(DIST_CAL);								// Odczyt kalibracji dystansu (dla impulsatora)
 	calibration.volt_cal = eeram_read16(VOLT_CAL);								// Odczyt kalibracji napiecia
+	calibration.temp_cal = eeram_read16(TEMP_CAL);								// Odczyt kalibracji temperatury
 	pulses_cnt1 = eeram_read32(DIST1);											// Odczyt dystansu odcinka
 	pulses_cnt2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
 	computeDistance();															// Oblicz dystans
@@ -833,19 +836,59 @@ void startWebServer()
 	web_server.on(F("/update_ver"), HTTP_POST, handleFWUpdate2);
 	web_server.on(F("/conf"), handleConf);
 	web_server.on(F("/cal"), handleCalibration);
+	web_server.on(F("/cal/cal_dist_plus10"), []()
+	{
+		calibration.dist_cal += 10;
+		web_server.sendHeader("Location", "/cal", true);
+		web_server.send (302, "text/plain", "");
+		//web_server.send(200, F("text/html"), handleCalibration());
+	});
 	web_server.on(F("/cal/cal_dist_plus"), []()
 	{
 		calibration.dist_cal++;
 		web_server.sendHeader("Location", "/cal", true);
 		web_server.send (302, "text/plain", "");
-		//web_server.send(200, F("text/html"), handleCalibration());
+	});
+	web_server.on(F("/cal/cal_dist_minus10"), []()
+	{
+		if (calibration.dist_cal > 10) calibration.dist_cal -= 10;
+
+		web_server.sendHeader("Location", "/cal", true);
+		web_server.send (302, "text/plain", "");
 	});
 	web_server.on(F("/cal/cal_dist_minus"), []()
 	{
-		calibration.dist_cal--;
+		if (calibration.dist_cal > 1) calibration.dist_cal--;
+
 		web_server.sendHeader("Location", "/cal", true);
 		web_server.send (302, "text/plain", "");
 		//web_server.send(200, F("text/html"), handleCalibration());
+	});
+	web_server.on(F("/cal/cal_volt_plus"), []()
+	{
+		calibration.volt_cal++;
+		web_server.sendHeader("Location", "/cal", true);
+		web_server.send (302, "text/plain", "");
+	});
+	web_server.on(F("/cal/cal_volt_minus"), []()
+	{
+		if (calibration.volt_cal > 1) calibration.volt_cal--;
+
+		web_server.sendHeader("Location", "/cal", true);
+		web_server.send (302, "text/plain", "");
+	});
+	web_server.on(F("/cal/cal_temp_plus"), []()
+	{
+		calibration.temp_cal++;
+		web_server.sendHeader("Location", "/cal", true);
+		web_server.send (302, "text/plain", "");
+	});
+	web_server.on(F("/cal/cal_temp_minus"), []()
+	{
+		if (calibration.temp_cal > 1) calibration.temp_cal--;
+
+		web_server.sendHeader("Location", "/cal", true);
+		web_server.send (302, "text/plain", "");
 	});
 	web_server.on(F("/login"), HTTP_GET, handleLogin);
 	web_server.on(F("/login_check"), HTTP_POST, handleLogin2);
@@ -915,19 +958,47 @@ void startWebServer()
 
 String handleCalibration()
 {
-	if (web_server.hasArg("SAVE")) eeram_save16(DIST_CAL, calibration.dist_cal);
+	if (web_server.hasArg("SAVE"))
+	{
+		eeram_save16(DIST_CAL, calibration.dist_cal);
+		eeram_save16(VOLT_CAL, calibration.volt_cal);
+		eeram_save16(TEMP_CAL, calibration.temp_cal);
+	}
 
 	String page = HTMLHeader(false);
-	page += F("<p><h3>Kalibracja metromierza</h3></p>\n");
+	page += F("<h1>Kalibracja</h1>\n");
 	//Image to DataURL converter https://onlinecamscanner.com/image-to-dataurl
 	//for (size_t i = 0; i < sizeof(obrazek); i++) page += char(pgm_read_byte(obrazek + i));
 	//p += "<img src='/top.jpg' alt=''>";
-	page += F("<p><a href = '/cal/cal_dist_plus'><button class='btn btn-primary btn-lg'>CAL +</button></a></p>\n"
-	          "<p><a href = '/cal/cal_dist_minus'><button class='btn btn-secondary btn-lg'>CAL -</button></a></p>\n"
-	          "<p><form action='/cal' method='POST'><button type='button submit' name='SAVE' value='1'"
-	          "class='btn btn-success btn-lg'>Zapis</button></form></p>\n"
-	          "<p><h1>");
-	page += String(calibration.dist_cal) + F("</h1></p>");
+	page += F("<table style='border: medium solid #FFFFFF; width:100%; height: 28px;'>\n"
+	          "<tr>\n"
+	          "<th class='text-center' colspan='2'>Dystans</th>\n"
+	          "<th class='text-center'>Napięcie</th>\n"
+	          "<th class='text-center'>Temperatura</th>\n"
+	          "</tr>\n"
+	          "<tr>\n"
+	          "<td style='width: 25%'><a href = '/cal/cal_dist_plus10'><button class='btn btn-primary btn-lg'>CAL +10</button></a></td>\n"
+	          "<td><a href = '/cal/cal_dist_plus'><button class='btn btn-primary btn-lg'>CAL +</button></a></td>\n"
+	          "<td><a href = '/cal/cal_volt_plus'><button class='btn btn-primary btn-lg'>CAL +</button></a></td>\n"
+	          "<td><a href = '/cal/cal_temp_plus'><button class='btn btn-primary btn-lg'>CAL +</button></a></td>\n"
+	          "</tr>\n"
+	          "<tr>\n"
+	          "<td style='width: 25%'><a href = '/cal/cal_dist_minus10'><button class='btn btn-secondary btn-lg'>CAL -10</button></a></td>\n"
+	          "<td><a href = '/cal/cal_dist_minus'><button class='btn btn-secondary btn-lg'>CAL -</button></a></td>\n"
+	          "<td><a href = '/cal/cal_volt_minus'><button class='btn btn-secondary btn-lg'>CAL -</button></a></td>\n"
+	          "<td><a href = '/cal/cal_temp_minus'><button class='btn btn-secondary btn-lg'>CAL -</button></a></td>\n"
+	          "</tr>\n"
+	          "<tr>\n"
+	          "<td colspan='2'><h3>");
+	page += String(calibration.dist_cal) + F("</h3>");
+	page += F("<td><h3>");
+	page += String(calibration.volt_cal) + F("</h3>");
+	page += F("<td><h3>");
+	page += String(calibration.temp_cal) + F("</h3>");
+	page += F("</tr>\n"
+	          "</table> \n");
+	page += F("<p><form action='/cal' method='POST'><button type='button submit' name='SAVE' value='1' "
+	          "class='btn btn-success btn-lg'>Zapis</button></form></p>\n");
 	page += HTMLFooter();
 	web_server.send(200, F("text/html"), page);
 	return page;
@@ -1400,7 +1471,7 @@ void openScr(enum SCREENS scr)
 
 void renderScreen(enum SCREENS scr)
 {
-	static uint32_t old_distance1, old_distance2;
+	static uint32_t /*old_distance1,*/ old_distance2;
 	static uint8_t old_secs, old_mins, old_hrs;
 	static bool secs10_flag;													// Flaga zwiekszenia dziesiatek sekund
 	static bool mins10_flag;													// Flaga zwiekszenia dziesiatek minut
@@ -1426,11 +1497,11 @@ void renderScreen(enum SCREENS scr)
 			break;
 
 		case SCR_DIST:
-			cursor_pos = computeEraseArea(distance1, old_distance1, 4);			// Selektywne zamazywanie dystansu odcinka Max 10^4 metrow
-			tft.fillRect((cursor_pos * 32), 33, 160 - (cursor_pos * 32) - 1, 48, TFT_BLACK);
+			//cursor_pos = computeEraseArea(distance1, old_distance1, 4);			// Selektywne zamazywanie dystansu odcinka Max 10^4 metrow
+			//tft.fillRect((cursor_pos * 32), 33, 160 - (cursor_pos * 32) - 1, 48, TFT_BLACK);
 			tft.setTextFont(7);													// Font 7segment
 			tft.setCursor(0, 33);												// Gorny lewy rog
-			tft.setTextColor(TFT_YELLOW);
+			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
 			tft.printf("%05d", distance1);
 			cursor_pos = computeEraseArea(distance2, old_distance2, 6);			// Selektywne zamazywanie dystansu globalnego Max 10^6 metrow
 
@@ -1446,13 +1517,13 @@ void renderScreen(enum SCREENS scr)
 				             25, TFT_BLACK);
 
 			tft.setFreeFont(&FreeMonoBold18pt7b);
-			tft.setTextColor(TFT_GOLD);
+			tft.setTextColor(TFT_GOLD, TFT_BLACK);								// Kolor tla nie dziala dla FreeFont, wiec trzeba czyscic
 			tft.setCursor(160 - (3 * 21), 104);
 			tft.printf("%03d", distance2 % 1000);								// Kilometry
 			tft.setCursor(0, 104);
 			tft.printf("%04d", (distance2 % 10000) / 1000);						// Metry
 			tft.fillCircle(90, 102, 2, TFT_GOLD);								// Kropka oddziela kilometry od metrow
-			old_distance1 = distance1;											// Zapamietaj poprzednie wartosci
+			//old_distance1 = distance1;											// Zapamietaj poprzednie wartosci
 			old_distance2 = distance2;
 			break;
 
@@ -1518,6 +1589,36 @@ void renderScreen(enum SCREENS scr)
 			break;
 
 		case SCR_COMBO:
+			tft.setTextSize(2);
+			tft.setCursor(4, 34);
+			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+			tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);			// Dystans odcinka
+			tft.setCursor(4, 50);
+			tft.setTextColor(TFT_GOLD, TFT_BLACK);
+			tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);		// Dystans globalny
+			tft.setTextSize(1);
+			tft.setTextColor(TFT_WHITE, TFT_BLACK);
+			tft.setCursor(100, 70);
+			tft.printf_P("%3d km/h", speed);									// Predkosc
+			tft.setCursor(100, 88);
+			tft.printf_P("%2d.%d V", volt / 10, volt % 10);						// Napiecie
+			tft.setCursor(100, 106);
+			tft.printf_P("%3d %cC", calibration.temp_cal, 247);					// Temperatura debug
+
+			if (new_course)														// Nowy kurs
+			{
+				renderCompassNeedle(course, (point_t) {116, 48}, 15);			// Przerysuj igle kompasu
+				tft.setCursor(134, 34);											// Napisz obok kompasu kurs
+				tft.printf_P("%3d%c", (int) gps.course.deg(), 247);				// Symbol stopni
+				tft.fillRect(134, 42, 18, 8, TFT_BLACK);
+				tft.setCursor(134, 42);
+				tft.print(gps.cardinal(course));
+				new_course = false;												// Skasuj flage
+			}
+
+			speed_gauge.update(speed);
+			volt_gauge.update(volt / 10);
+			temp_gauge.update(calibration.temp_cal);							// debug
 			break;
 
 		case SCR_GPS:
@@ -1539,11 +1640,11 @@ void renderScreen(enum SCREENS scr)
 			if (new_course)														// Nowy kurs
 			{
 				renderCompassNeedle(course, (point_t) {COMPASS_X, COMPASS_Y}, COMPASS_R);			// Przerysuj igle kompasu
-				tft.fillRect(120, 100, 24, 16, TFT_BLACK);						// Zamaz stary kurs
 				tft.setCursor(120, 100);										// Napisz pod kompasem kurs
-				tft.printf_P("%d%c", (int) gps.course.deg(), 247);				// Symbol stopni
+				tft.printf_P("%3d%c", (int) gps.course.deg(), 247);				// Symbol stopni
 				tft.setCursor(120, 108);
-				tft.print(gps.cardinal(course));
+				//tft.fillRect(120, 108, 18, 8, TFT_BLACK);						// Zamaz stary kurs
+				tft.print(gps.cardinal(course)); tft.print("  ");
 				new_course = false;												// Skasuj flage
 			}
 
@@ -1557,7 +1658,7 @@ void renderScreen(enum SCREENS scr)
 
 			if (gps.altitude.isUpdated())
 			{
-				tft.setCursor(4 + 5 *6, 100);									// Tylko wartosc, wiec przesuniety kursor
+				tft.setCursor(4 + 5 * 6, 100);									// Tylko wartosc, wiec przesuniety kursor
 				tft.printf_P("%4d", (int) gps.altitude.meters());
 			}
 
@@ -1707,7 +1808,7 @@ void computeSpeed()
 void computeVolt()
 {
 	static uint16_t old_volt;
-	volt = (analogRead(A0) / 1024) * 22 * 10;									// dzielnik rezystorowy 1:22 [*10]
+	volt = (analogRead(A0) * 22 * 10) / 1024.0;									// dzielnik rezystorowy 1:22 [*10]
 	volt = (volt * 100) / calibration.volt_cal;									// Kalibracja
 	volt = (volt + old_volt) / 2;												// Srednia z dwoch pomiarow
 	old_volt = volt;															// Zapamietaj poprzednia wartosc
@@ -1796,10 +1897,17 @@ void openNavi() {clearWindow();}
 void openCombo()
 {
 	clearWindow();
-	tft.setTextColor(TFT_WHITE, TFT_BLACK);
-	tft.setCursor(0, 32);
-
-	for (size_t i = 0; i < 256; i++) tft.print(char(i));
+	tft.setTextSize(2);
+	tft.setCursor(4, 34);
+	tft.setTextColor(TFT_YELLOW);
+	tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);
+	tft.setCursor(4, 50);
+	tft.setTextColor(TFT_GOLD);
+	tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);
+	tft.drawCircle(116, 48, 15, TFT_WHITE);										// Okrag kompasu
+	speed_gauge.show();
+	volt_gauge.show();
+	temp_gauge.show();
 }
 
 void openGPS()
@@ -1821,14 +1929,14 @@ void openGPS()
 	tft.setCursor(4, 116);
 	tft.printf_P("FIX:  %3d s", gps.location.age() < 999000 ? gps.location.age() / 1000 : 0);
 
-	if (gps.course.isValid())
+/* 	if (gps.course.isValid())
 	{
 		tft.setCursor(120, 100);
-		tft.printf_P("%d%c", (int) gps.course.deg(), 247);						// 247 - kod ASCII stopni
+		tft.printf_P("%3d%c", (int) gps.course.deg(), 247);						// 247 - kod ASCII stopni
 		tft.setCursor(120, 108);
 		tft.print(gps.cardinal(course));
 	}
-}
+ */}
 
 void satCustomInit()
 {
@@ -1908,8 +2016,8 @@ void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r)
 	tft.fillTriangle(n.x, n.y, e.x, e.y, w.x, w.y, TFT_BLACK);					// Zamaz poprzednie wskazanie kompasu
 	tft.fillTriangle(s.x, s.y, e.x, e.y, w.x, w.y, TFT_BLACK);
 	n = mtx_mul_vec(*trt_mtx, (point_t) {xy.x, xy.y - r + 2});					// Oblicz polozenie "igly kompasu"
-	e = mtx_mul_vec(*trt_mtx, (point_t) {xy.x + 6, xy.y});
-	w = mtx_mul_vec(*trt_mtx, (point_t) {xy.x - 6, xy.y});
+	e = mtx_mul_vec(*trt_mtx, (point_t) {xy.x + (r / 5), xy.y});
+	w = mtx_mul_vec(*trt_mtx, (point_t) {xy.x - (r / 5), xy.y});
 	s = mtx_mul_vec(*trt_mtx, (point_t) {xy.x, xy.y + r - 2});
 	tft.fillTriangle(n.x, n.y, e.x, e.y, w.x, w.y, TFT_RED);					// Nowe wskazanie kompasu (czerwona igla)
 	tft.fillTriangle(s.x, s.y, e.x, e.y, w.x, w.y, TFT_WHITE);					// Biala igla
