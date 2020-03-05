@@ -198,6 +198,7 @@ void mux_switch(enum MUX_STATES state)
 void everySecTask()
 {
 	static uint8_t save_time;
+	static uint8_t rec_wpt;
 	static int16_t old_course;
 	even_odd ^= 1;																// Co sekunde zmien flage
 	computeSpeed();																// Aktualizacja predkosci
@@ -245,6 +246,15 @@ void everySecTask()
 		old_lat = cur_lat;														// Zapamietaj lokalizacje jako stara
 		old_lon = cur_lon;
 		course = (int16_t) gps.course.deg();									// Nowy kurs
+
+		if (trk_rec_flag)
+		{
+			if (rec_wpt++ > REC_WPT)											// Jezeli nagrywanie gpx
+			{
+				addWpt2Trk();													// Dodaj punkt do .gpx
+				rec_wpt = 0;													// Wyzeruj timeout
+			}
+		}
 
 		if (abs(course - old_course) > COURSE_DIFF)								// Jezeli kurs sie zmienil o co najmniej 4 stopnie
 		{
@@ -672,7 +682,7 @@ void update_started(void)
 
 void update_finished(void)
 {
-	tft.setCursor(2, 56, 1);
+	tft.setCursor(2, 64, 1);
 	tft.setTextSize(2);
 	tft.setTextColor(TFT_BLACK);
 	tft.printf_P(PSTR("Restartuje..."));
@@ -1690,8 +1700,6 @@ void renderCtrl(btn_t *ctrl)
 
 void renderToolbar(enum TOOLBAR_ITEMS item)
 {
-	uint8_t tz = conf.getInt("tz");												// Strefa czasowa
-
 	switch (item)
 	{
 		case WIFI_XOFF:
@@ -1712,7 +1720,7 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			tft.setCursor(TBARX_TIME, 0);
 			tft.setTextSize(1);
 			tft.setTextFont(1);
-			tft.printf_P("%02d:%02d", ((gps.time.hour() + tz) % 24), gps.time.minute());
+			tft.printf_P("%02d:%02d", ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute());
 			break;
 
 		case GPS_FIX:
@@ -1904,7 +1912,46 @@ void satCustomInit()
 	}
 }
 void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
-void btnSaveTrk(bool on_off) {}
+void btnSaveTrk(bool on_off)
+{
+	if (on_off)
+	{
+		sprintf(gpx_file, "/%02d-%02d-%02d/%02d-%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
+		        ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute());
+		debugI("Plik GPX: %s", gpx_file);
+		SPIFFS_file = SPIFFS.open(gpx_file, "w");
+		SPIFFS_file.print(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"	// Naglowek pliku
+		                    "<gpx version=\"1.1\" creator=\"SDMoto\" xmlns=\"http://www.topografix.com/GPX/1/1\" "
+		                    "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+		                    "xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">\r\n"
+		                    "\t<trk>\r\n\t\t<trkseg>\r\n"));
+		SPIFFS_file.print(F("\t\t</trkseg>\r\n\t</trk>\r\n</gpx>\r\n"));		// 30 znakow na koncu!!!
+		SPIFFS_file.close();
+		addWpt2Trk();															// Pierwszy waypoint od razu
+		trk_rec_flag = true;													// Ustaw flage nagrywania sladu gpx
+	}
+	else trk_rec_flag = false;													// Skasuj flage nagrywania
+}
+
+void addWpt2Trk(void)
+{
+	char wpt_date[22];															// Data zalogowania WPT
+	sprintf(wpt_date, "%4d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(),
+	        gps.date.day(), ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute(), gps.time.second());
+	SPIFFS_file = SPIFFS.open(gpx_file, "r+");									// Otworz plik do dopisywania
+	SPIFFS_file.seek(SPIFFS_file.size() - 30, SeekSet);							// Koncowka pliku - 30 bajtow
+	SPIFFS_file.print(F("\t\t\t<trkpt lat=\""));								// Budowanie xml
+	SPIFFS_file.printf_P("%.5f\" lon=\"", gps.location.lat());
+	SPIFFS_file.printf_P("%.5f\">\r\n", gps.location.lng());
+	SPIFFS_file.print(F("\t\t\t\t<time>"));
+	SPIFFS_file.print(wpt_date);
+	SPIFFS_file.print(F("</time>\r\n\t\t\t\t<ele>"));
+	SPIFFS_file.printf_P("%d</ele>\r\n\t\t\t\t<hdop>", (int) gps.altitude.meters());
+	SPIFFS_file.printf_P("%.1f</hdop>\r\n\t\t\t</trkpt>\r\n", gps.hdop.hdop());
+	SPIFFS_file.print(F("\t\t</trkseg>\r\n\t</trk>\r\n</gpx>\r\n"));			// Ostatnie 30 bajtow
+	SPIFFS_file.close();
+}
+
 void btnSaveWpt(bool on_off) {}
 void btnNav2Wpt(bool on_off) {}
 

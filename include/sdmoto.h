@@ -51,6 +51,7 @@
 #define MAX_DOP			10														// Najgorsza precyzja [m]
 #define TIMER_REFRESH	55														// Czas odswiezania stopera [ms]
 #define COURSE_DIFF		3														// Minimalna zmiana kursu dla przerysowania kompasu
+#define REC_WPT			5														// Ilosc sekund miedzy zapisem WPT do .gpx
 
 #define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
 #define NAVI_SAVE_WPT	1
@@ -142,6 +143,8 @@ sat_t sats_stats[MAX_SATS];														// Tabela parametrow satelitow
 float trt_mtx[3][3];															// Macierz (przesuniecie x obrot x przesuniecie)
 uint16_t course;																// Aktualny kurs wg gps
 bool new_course;																// Flaga nowego kursu
+char gpx_file[20];																// Plik gpx z nagrywanym sladem
+bool trk_rec_flag;																// Flaga nagrywania pliku gpx
 
 void make_trt_mtx(point_t xy, float phi);										// Przygotowanie macierzy
 point_t mtx_mul_vec(float *mtx, point_t xy);									// Mnozenie macierzy
@@ -207,6 +210,7 @@ void meantimeSave(void);														// Zapis miedzyczas stopera
 void satCustomInit(void);														// Inicjalizacja statystyk satelitow
 void satUpdateStats(void);														// Aktualizacja statystyk satelitow
 void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r);				// Rysowanie igly kompasu
+void addWpt2Trk(void);															// Zapis WPT do .gpx
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 
