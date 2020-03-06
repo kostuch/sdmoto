@@ -247,9 +247,9 @@ void everySecTask()
 		old_lon = cur_lon;
 		course = (int16_t) gps.course.deg();									// Nowy kurs
 
-		if (trk_rec_flag)
+		if (navi_state == REC_TRK)												// Jezeli nagrywanie gpx
 		{
-			if (rec_wpt++ > REC_WPT)											// Jezeli nagrywanie gpx
+			if (rec_wpt++ > REC_WPT)											// Co zdefiniowany czas
 			{
 				addWpt2Trk();													// Dodaj punkt do .gpx
 				rec_wpt = 0;													// Wyzeruj timeout
@@ -1159,6 +1159,8 @@ void keyShortPress(enum BUTTONS button)
 							computeDistance();									// Przelicz dystanse
 						}
 
+						if (navi_state == REC_WPTS)	addWpt2Wpt(false);			// Dodaj kolejny waypoint do pliku gpx, jezeli aktywny zapis
+
 						renderScreen(screen);									// Aktualizuj ekran
 						break;
 
@@ -1186,7 +1188,7 @@ void keyShortPress(enum BUTTONS button)
 					ctrl_state[screen][1] = ctrl_state[screen][0];				// Zapisz biezaca kontrolke jako aktywna
 					ctrl_state[screen][1] |= 0x80;								// Ustaw MSB jako znacznik aktywowanej kontrolki
 					renderCtrl(idx + ctrl_state[screen][0]);
-					btnExe = idx->key_exec;										// exe w zaleznosci od kontrolki
+					btnExe = (idx + ctrl_state[screen][0])->key_exec;			// exe w zaleznosci od kontrolki
 
 					if (btnExe) btnExe(true);									// Wykonaj
 				}
@@ -1197,7 +1199,7 @@ void keyShortPress(enum BUTTONS button)
 					{
 						ctrl_state[screen][1] &= 0x7F;							// Skasuj MSB jako znacznik deaktywowanej kontrolki
 						renderCtrl(idx + ctrl_state[screen][0]);
-						btnExe = idx->key_exec;									// exe w zaleznosci od kontrolki
+						btnExe = (idx + ctrl_state[screen][0])->key_exec;		// exe w zaleznosci od kontrolki
 
 						if (btnExe) btnExe(false);								// Wykonaj
 					}
@@ -1485,8 +1487,8 @@ void renderScreen(enum SCREENS scr)
 		case SCR_DIST:
 			//cursor_pos = computeEraseArea(distance1, old_distance1, 4);			// Selektywne zamazywanie dystansu odcinka Max 10^4 metrow
 			//tft.fillRect((cursor_pos * 32), 33, 160 - (cursor_pos * 32) - 1, 48, TFT_BLACK);
-			//tft.setTextFont(7);													// Font 7segment
-			tft.setCursor(0, 33, 7);											// Gorny lewy rog, Font 7
+			tft.setTextFont(7);													// Font 7segment
+			tft.setCursor(0, 33);												// Gorny lewy rog
 			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
 			tft.printf("%05d", distance1);
 			cursor_pos = computeEraseArea(distance2, old_distance2, 6);			// Selektywne zamazywanie dystansu globalnego Max 10^6 metrow
@@ -1821,7 +1823,7 @@ uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
 void clearWindow()
 {
 	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
-	tft.drawRect(0, 32, 160, 96, TFT_YELLOW);									// Ramka - sygnalizuje przelaczanie ekranow
+	if (btn_mode == CHG_SCR) tft.drawRect(0, 32, 160, 96, TFT_YELLOW);			// Ramka okna - sygnalizuje przelaczanie ekranow
 	tft.setTextFont(1);
 	tft.setTextSize(1);
 }
@@ -1829,9 +1831,10 @@ void clearWindow()
 void tftMsg(String message)
 {
 	tft.fillRect(10, 40, 140, 40, TFT_BLACK);
-	tft.drawRect(10, 40, 140, 40, TFT_WHITE);
+	tft.drawRect(10, 40, 140, 40, TFT_RED);
+	tft.drawRect(11, 41, 138, 38, TFT_RED);
 	tft.drawCentreString(message, 80, 60, 1);
-	one_shoot.once_ms(2000, std::bind(renderScreen, screen));					// Przerysuj po 2s ekran
+	one_shoot.once_ms(1500, std::bind(openScreen, screen));						// Odswierz po chwili ekran
 }
 
 void openDist() {clearWindow();}
@@ -1912,13 +1915,20 @@ void satCustomInit()
 	}
 }
 void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
+
 void btnSaveTrk(bool on_off)
 {
+ 	if (!fix)
+	{
+		tftMsg(F("Brak FIXa!!! No TRK"));
+		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		return;
+	}
+
 	if (on_off)
 	{
-		sprintf(gpx_file, "/%02d-%02d-%02d/%02d-%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
+		sprintf(gpx_file, "/trk_%02d-%02d-%02d_%02d:%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
 		        ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute());
-		debugI("Plik GPX: %s", gpx_file);
 		SPIFFS_file = SPIFFS.open(gpx_file, "w");
 		SPIFFS_file.print(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"	// Naglowek pliku
 		                    "<gpx version=\"1.1\" creator=\"SDMoto\" xmlns=\"http://www.topografix.com/GPX/1/1\" "
@@ -1928,9 +1938,9 @@ void btnSaveTrk(bool on_off)
 		SPIFFS_file.print(F("\t\t</trkseg>\r\n\t</trk>\r\n</gpx>\r\n"));		// 30 znakow na koncu!!!
 		SPIFFS_file.close();
 		addWpt2Trk();															// Pierwszy waypoint od razu
-		trk_rec_flag = true;													// Ustaw flage nagrywania sladu gpx
+		navi_state = REC_TRK;													// Ustaw flage nagrywania sladu gpx
 	}
-	else trk_rec_flag = false;													// Skasuj flage nagrywania
+	else navi_state = NO_TARGET;												// Skasuj flage nagrywania
 }
 
 void addWpt2Trk(void)
@@ -1952,8 +1962,57 @@ void addWpt2Trk(void)
 	SPIFFS_file.close();
 }
 
-void btnSaveWpt(bool on_off) {}
-void btnNav2Wpt(bool on_off) {}
+void btnSaveWpt(bool on_off)
+{
+ 	if (!fix)
+	{
+		tftMsg(F("Brak FIXa!!! No WPT"));
+		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		return;
+	}
+
+	if (on_off)
+	{
+		sprintf(gpx_file, "/wpt_%02d-%02d-%02d_%02d:%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
+		        ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute());
+		SPIFFS_file = SPIFFS.open(gpx_file, "w");
+		SPIFFS_file.print(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"	// Naglowek pliku
+		                    "<gpx version=\"1.1\" creator=\"SDMoto\" xmlns=\"http://www.topografix.com/GPX/1/1\" "
+		                    "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+		                    "xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">\r\n"
+		                    "</gpx>\r\n"));										// Zamykajacy tag (8 bajtow)
+		SPIFFS_file.close();
+		addWpt2Wpt(true);														// Pierwszy waypoint
+		navi_state = REC_WPTS;
+	}
+	else navi_state = NO_TARGET;
+}
+
+void addWpt2Wpt(bool reset_num)
+{
+	static uint16_t wpt_num;													// Licznik waypointow
+
+	if (reset_num) wpt_num = 0;													// Kasowanie numeru waypointa, jezeli nowy plik
+
+	SPIFFS_file = SPIFFS.open(gpx_file, "r+");									// Otworz plik do dopisywania
+	SPIFFS_file.seek(SPIFFS_file.size() - 8, SeekSet);							// Koncowka pliku - 8 bajtow
+	debugI("Waypoint %d", wpt_num);
+	SPIFFS_file.print(F("\t<wpt lat=\""));										// Budowanie xml
+	SPIFFS_file.printf_P("%.5f\" lon=\"", gps.location.lat());
+	SPIFFS_file.printf_P("%.5f\">\r\n", gps.location.lng());
+	SPIFFS_file.printf_P("\t<name>WPT-%03d</name>\r\n\t</wpt>\r\n</gpx>\r\n", wpt_num++);
+	SPIFFS_file.close();
+}
+
+void btnNav2Wpt(bool on_off)
+{
+ 	if (!fix)
+	{
+		tftMsg(F("Brak FIXa!!!"));
+		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		return;
+	}
+}
 
 void satUpdateStats()
 {
