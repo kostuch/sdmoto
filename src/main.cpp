@@ -49,7 +49,8 @@ WiFiEventHandler	STAstationGotIPHandler;
 WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
-// Predkosciomierz do 150km/h
+SimpleList<String>	wptfile_lst;												// Lista plikow z waypointami
+	// Predkosciomierz do 150km/h
 HGauge speed_gauge(&tft, 2, 74, 96, 16, TFT_BLACK, TFT_WHITE, TFT_RED, false, "", 1, G_PLAIN, 0, 150);
 // Woltomierz 10-16V
 HGauge volt_gauge(&tft, 2, 92, 96, 16, TFT_BLACK, TFT_WHITE, TFT_BLUE, false, "", 1, G_R2G, 10, 16);
@@ -113,7 +114,7 @@ void setup()
 	pulses_cnt2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
 	computeDistance();															// Oblicz dystans
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
-	openScreen(screen);															// Otworz go
+	openScreen(screen, true);													// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	satCustomInit();															// Inicjalizacja statystyk satelitow
 }
@@ -1370,7 +1371,7 @@ void prevScr()
 			break;
 	}
 
-	openScreen(screen);
+	openScreen(screen, true);
 }
 
 void nextScr()
@@ -1422,14 +1423,15 @@ void nextScr()
 			break;
 	}
 
-	openScreen(screen);
+	openScreen(screen, true);
 }
 
-void openScreen(enum SCREENS scr)
+void openScreen(enum SCREENS scr, bool remember)
 {
 	if (closeScr) closeScr();													// Wykonaj zamkniecie poprzedniego ekranu (jesli ustawione)
 
-	eeram.write(LAST_SCREEN, screen);											// Zapamietaj aktualny ekran
+	if (remember) eeram.write(LAST_SCREEN, screen);								// Zapamietaj aktualny ekran
+
 	screen_t screen_buf;
 	btn_t key_buf;																// Pomocniczy bufor dla kontrolki
 	memcpy_P(&screen_buf, &screen_data[screen], sizeof(screen_buf));			// Kopiuj opis z tabeli do bufora
@@ -1576,17 +1578,16 @@ void renderScreen(enum SCREENS scr)
 				tft.setTextColor(TFT_GOLD, TFT_BLACK);
 				tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);	// Dystans globalny
 				tft.setTextSize(1);
-
-				if (new_course)													// Nowy kurs
-				{
-					renderCompassNeedle(course, (point_t) {122, 70}, 30);		// Przerysuj igle kompasu
-					tft.setCursor(122, 96);										// Napisz pod horyzontem kurs
-					tft.printf_P("%3d%c", (int) gps.course.deg(), 247);			// Symbol stopni
-					tft.setCursor(122, 104);
-					tft.printf_P("%-3s", gps.cardinal(course));					// Wyrownanie do lewej (i jednoczesnie kasowanie)
-					new_course = false;											// Skasuj flage
-				}
-
+				/* 				if (new_course)													// Nowy kurs
+								{
+									renderCompassNeedle(course, (point_t) {122, 70}, 30);		// Przerysuj igle kompasu
+									tft.setCursor(122, 96);										// Napisz pod horyzontem kurs
+									tft.printf_P("%3d%c", (int) gps.course.deg(), 247);			// Symbol stopni
+									tft.setCursor(122, 104);
+									tft.printf_P("%-3s", gps.cardinal(course));					// Wyrownanie do lewej (i jednoczesnie kasowanie)
+									new_course = false;											// Skasuj flage
+								}
+				 */
 			}
 			else
 			{
@@ -1594,14 +1595,14 @@ void renderScreen(enum SCREENS scr)
 				uint32_t distance_to = gps.distanceBetween(gps.location.lat(), gps.location.lng(), dest_wpt.wpt_lat, dest_wpt.wpt_lon);
 				// Kurs na waypoint
 				uint16_t course_to = (uint16_t) gps.courseTo(gps.location.lat(), gps.location.lng(), dest_wpt.wpt_lat, dest_wpt.wpt_lon);
-				
+
 				if ((distance_to != old_distance_to) || (course_to != old_course_to))
 				{
 					tft.setTextSize(2);
 					tft.setCursor(4, 94);
 					tft.setTextColor(TFT_YELLOW, TFT_BLACK);
 					tft.printf("WPT za %03d", distance_to);							// Dystans do celu (waypointa)
-					
+
 					// W zaleznosci od odleglosci do waypointa, zaznacz go innym kolorem i w innej pozycji wzgledem horyzontu
 					if (distance_to > 2000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 34, TFT_RED);
 					else if (distance_to > 1000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 26, TFT_YELLOW);
@@ -1883,7 +1884,7 @@ void tftMsg(String message)
 	tft.drawRect(10, 40, 140, 40, TFT_RED);
 	tft.drawRect(11, 41, 138, 38, TFT_RED);
 	tft.drawCentreString(message, 80, 60, 1);
-	one_shoot.once_ms(1500, std::bind(openScreen, screen));						// Odswierz po chwili ekran
+	one_shoot.once_ms(1500, std::bind(openScreen, screen, true));				// Odswierz po chwili ekran
 }
 
 void openDist() {clearWindow();}
@@ -1901,21 +1902,79 @@ void openTime()
 
 void closeTime() {if (timer_state == TMR_RUN) timer_tmr.detach();}				// Wylacz odswierzanie ekranu stopera
 
-void openNavi()
+void openNavi() {clearWindow();}
+
+void openWptFile()
 {
 	clearWindow();
-	tft.drawCircle(122, 70, 30, TFT_WHITE);										// Okrag kompasu/horyzontu
-	/* 
-	tft.setTextSize(2);
-	tft.setCursor(4, 94);
-	tft.setTextColor(TFT_YELLOW);
-	tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);
-	tft.setCursor(4, 110);
-	tft.setTextColor(TFT_GOLD);
-	tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);
-	tft.setTextSize(1);
-	 */
+	fs::Dir dir = SPIFFS.openDir("/");
+	wptfile_lst.clear();
+	tft.setTextColor(TFT_WHITE, TFT_BLACK);
+	tft.setCursor(0, 32);
+	tft.printf("Wybierz plik");
+
+	while (dir.next())															// Przejrzyj katalog
+	{
+		if (dir.fileName().endsWith(".gpx"))									// Wszystkie pliki gpx
+		{
+			wptfile_lst.push_back(dir.fileName());								// Dodaj do listy
+			//tft.setCursor(4, 32 + (wptfile_lst.size() * 8));					// Ustaw dla kazdego kursor
+
+			//if (dir.fileName().length() > 16) tft.print(dir.fileName().substring(1, 16));
+			//else tft.print(dir.fileName().substring(1));						// Bez pierwszego znaku, max 16 znakow
+
+			//if (wptfile_lst.size() > 9) break;									// Max 10 plikow gpx
+		}
+	}
+	
+	if (wptfile_lst.size())														// Jezeli sa jakies pliki na liscie
+	{
+		cur_file = 0;
+		listWptFiles(cur_file);													// Listuj pliki poczawszy od pierwszego
+	}
+	else tft.printf_P("Brak plikow z waypointami!!!");
 }
+
+void listWptFiles(uint8_t file_pos)
+{
+	uint8_t files_set_no = file_pos / LIST_FILES_SET;							// Nr "Kompletu" plikow. Na ekranie miesci sie 9 nazw
+	
+	if (wptfile_lst.size() > LIST_FILES_SET)									// Jezeli pliki nie mieszcza sie na ekranie
+	{
+		tft.setCursor(6, 40 + 10 * 8);											// Na dole listy
+		tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+		tft.print(F("...wiecej"));												// Zacheta
+	}
+
+	tft.setCursor(0, 40);														// Listuj zawsze od gory
+	SimpleList<String>::iterator itr = wptfile_lst.begin() + (files_set_no * LIST_FILES_SET); // Odleglosc od poczatku listy w kompletach
+
+	for (uint8_t f = 0; f < LIST_FILES_SET; f++)								// Najwyzej #def plikow na ekranie
+	{
+		uint8_t ff = (files_set_no * LIST_FILES_SET) + f;						// Pozycja w ramach kompletu
+
+		if (ff == wptfile_lst.size()) break;									// Jezeli koniec listy plikow, przerwij listowanie
+		else
+		{
+			if (ff == file_pos)
+			{
+				tft.setTextColor(TFT_GREEN, TFT_BLACK);							// Biezacy plik listuj na zielono
+				tft.print(F(">"));												// Wskaznik graficzny
+			}
+			else tft.setTextColor(TFT_WHITE, TFT_BLACK);						// Pozostale na bialo
+
+			debugI("%s", itr->c_str());
+			if (itr->length() > 20)	tft.drawString(itr->substring(1, 20), 6, 40 + ff * 8);
+			else tft.drawString(itr->substring(1), 6, 40 + ff * 8);
+			itr++;
+		}
+	}
+}
+
+void openWpt()
+{
+}
+
 void openCombo()
 {
 	clearWindow();
@@ -1990,7 +2049,7 @@ void btnSaveTrk(bool on_off)
 
 	if (on_off)
 	{
-		sprintf(gpx_file, "/trk_%02d-%02d-%02d_%02d:%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
+		sprintf(gpx_file, "/trk%02d%02d%02d_%02d-%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
 		        ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute());
 		SPIFFS_file = SPIFFS.open(gpx_file, "w");
 		SPIFFS_file.print(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"	// Naglowek pliku
@@ -2036,7 +2095,7 @@ void btnSaveWpt(bool on_off)
 
 	if (on_off)
 	{
-		sprintf(gpx_file, "/wpt_%02d-%02d-%02d_%02d:%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
+		sprintf(gpx_file, "/wpt%02d%02d%02d_%02d-%02d.gpx", gps.date.year() - 2000, gps.date.month(), gps.date.day(),
 		        ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute());
 		SPIFFS_file = SPIFFS.open(gpx_file, "w");
 		SPIFFS_file.print(F("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n"	// Naglowek pliku
@@ -2078,14 +2137,34 @@ void btnNav2Wpt(bool on_off)
 
 	if (on_off)
 	{
+		screen = SCR_FILES;
+		openScreen(screen, false);
+	}
+
+	/*
+	if (on_off)
+	{
+		tft.drawCircle(122, 70, 30, TFT_WHITE);										// Okrag kompasu/horyzontu
 		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_WHITE);	// Symbol w srodku horyzontu
 	}
 	else
 	{
 		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_BLACK); //Skasuj symbol w srodku horyzontu
-	}
+	} */
 }
 
+void prevWptFile(bool on_off)
+{
+
+}
+void nextWptFile(bool on_off)
+{
+
+}
+void thisWptFile(bool on_off)
+{
+
+}
 void satUpdateStats()
 {
 	/*
