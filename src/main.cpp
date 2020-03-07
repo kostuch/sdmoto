@@ -49,7 +49,6 @@ WiFiEventHandler	STAstationGotIPHandler;
 WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
-SimpleList<rect_t>	rect_list;
 // Predkosciomierz do 150km/h
 HGauge speed_gauge(&tft, 2, 74, 96, 16, TFT_BLACK, TFT_WHITE, TFT_RED, false, "", 1, G_PLAIN, 0, 150);
 // Woltomierz 10-16V
@@ -1462,6 +1461,8 @@ void renderScreen(enum SCREENS scr)
 {
 	static uint32_t /*old_distance1,*/ old_distance2;
 	static uint8_t old_secs, old_mins, old_hrs;
+	static uint32_t old_distance_to;
+	static uint16_t old_course_to;
 	uint8_t cursor_pos;
 	uint8_t sats_on_sky = 0;
 
@@ -1565,6 +1566,52 @@ void renderScreen(enum SCREENS scr)
 			break;
 
 		case SCR_NAVI:
+			if (navi_state != NAVI_WPTS)										// Jezeli nie ma nawigacji na waypoint
+			{
+				tft.setTextSize(2);
+				tft.setCursor(4, 94);
+				tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+				tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);		// Dystans odcinka
+				tft.setCursor(4, 110);
+				tft.setTextColor(TFT_GOLD, TFT_BLACK);
+				tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);	// Dystans globalny
+				tft.setTextSize(1);
+
+				if (new_course)													// Nowy kurs
+				{
+					renderCompassNeedle(course, (point_t) {122, 70}, 30);		// Przerysuj igle kompasu
+					tft.setCursor(122, 96);										// Napisz pod horyzontem kurs
+					tft.printf_P("%3d%c", (int) gps.course.deg(), 247);			// Symbol stopni
+					tft.setCursor(122, 104);
+					tft.printf_P("%-3s", gps.cardinal(course));					// Wyrownanie do lewej (i jednoczesnie kasowanie)
+					new_course = false;											// Skasuj flage
+				}
+
+			}
+			else
+			{
+				// Odleglosc od waypointa (w metrach)
+				uint32_t distance_to = gps.distanceBetween(gps.location.lat(), gps.location.lng(), dest_wpt.wpt_lat, dest_wpt.wpt_lon);
+				// Kurs na waypoint
+				uint16_t course_to = (uint16_t) gps.courseTo(gps.location.lat(), gps.location.lng(), dest_wpt.wpt_lat, dest_wpt.wpt_lon);
+				
+				if ((distance_to != old_distance_to) || (course_to != old_course_to))
+				{
+					tft.setTextSize(2);
+					tft.setCursor(4, 94);
+					tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+					tft.printf("WPT za %03d", distance_to);							// Dystans do celu (waypointa)
+					
+					// W zaleznosci od odleglosci do waypointa, zaznacz go innym kolorem i w innej pozycji wzgledem horyzontu
+					if (distance_to > 2000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 34, TFT_RED);
+					else if (distance_to > 1000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 26, TFT_YELLOW);
+					else if (distance_to > 250) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 18, TFT_GREENYELLOW);
+					else renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 10, TFT_GREEN);
+					old_distance_to = distance_to;
+					old_course_to = course_to;
+				}
+			}
+
 			break;
 
 		case SCR_COMBO:
@@ -1823,7 +1870,9 @@ uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length)
 void clearWindow()
 {
 	tft.fillRect(0, 32, 160, 96, TFT_BLACK);									// Wyczysc ekran poza toolbarem
+
 	if (btn_mode == CHG_SCR) tft.drawRect(0, 32, 160, 96, TFT_YELLOW);			// Ramka okna - sygnalizuje przelaczanie ekranow
+
 	tft.setTextFont(1);
 	tft.setTextSize(1);
 }
@@ -1852,7 +1901,21 @@ void openTime()
 
 void closeTime() {if (timer_state == TMR_RUN) timer_tmr.detach();}				// Wylacz odswierzanie ekranu stopera
 
-void openNavi() {clearWindow();}
+void openNavi()
+{
+	clearWindow();
+	tft.drawCircle(122, 70, 30, TFT_WHITE);										// Okrag kompasu/horyzontu
+	/* 
+	tft.setTextSize(2);
+	tft.setCursor(4, 94);
+	tft.setTextColor(TFT_YELLOW);
+	tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);
+	tft.setCursor(4, 110);
+	tft.setTextColor(TFT_GOLD);
+	tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);
+	tft.setTextSize(1);
+	 */
+}
 void openCombo()
 {
 	clearWindow();
@@ -1918,7 +1981,7 @@ void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage n
 
 void btnSaveTrk(bool on_off)
 {
- 	if (!fix)
+	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!! No TRK"));
 		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
@@ -1964,7 +2027,7 @@ void addWpt2Trk(void)
 
 void btnSaveWpt(bool on_off)
 {
- 	if (!fix)
+	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!! No WPT"));
 		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
@@ -2006,11 +2069,20 @@ void addWpt2Wpt(bool reset_num)
 
 void btnNav2Wpt(bool on_off)
 {
- 	if (!fix)
+	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
 		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		return;
+	}
+
+	if (on_off)
+	{
+		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_WHITE);	// Symbol w srodku horyzontu
+	}
+	else
+	{
+		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_BLACK); //Skasuj symbol w srodku horyzontu
 	}
 }
 
@@ -2066,6 +2138,15 @@ void satUpdateStats()
 
 		slot = 0;
 	}
+}
+
+void renderWpt(uint16_t course, point_t xy, uint8_t shift, uint16_t color)
+{
+	static point_t wpt_xy;														// Wspolrzedne srodku kolka waypointa
+	make_trt_mtx(xy, -course * 0.0175);											// Ujemne radiany
+	tft.fillCircle(wpt_xy.x, wpt_xy.y, 3, TFT_BLACK);							// Zamaz kolko waypointa
+	wpt_xy = mtx_mul_vec(*trt_mtx, (point_t) {xy.x, xy.y - shift});				// Oblicz polozenie srodka kolka waypointa
+	tft.fillCircle(wpt_xy.x, wpt_xy.y, 3, color);								// Narysuj kolko waypointa
 }
 
 void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r)

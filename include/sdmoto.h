@@ -52,10 +52,7 @@
 #define TIMER_REFRESH	55														// Czas odswiezania stopera [ms]
 #define COURSE_DIFF		3														// Minimalna zmiana kursu dla przerysowania kompasu
 #define REC_WPT			5														// Ilosc sekund miedzy zapisem WPT do .gpx
-
-#define NAVI_SAVE_TRK	0 														// Numer bitu - numer kontrolki
-#define NAVI_SAVE_WPT	1
-#define NAVI_TO_WPT		2
+#define WPT_NAME_LEN	8														// Dlugosc nazwy waypointa do nawigacji
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
@@ -70,6 +67,14 @@ typedef struct
 	int		x;
 	int		y;
 } point_t;																		// Punkt na ekranie
+
+typedef struct
+{
+	char		wpt_name[WPT_NAME_LEN];
+	float		wpt_lat;
+	float		wpt_lon;
+} wpt_t;																		// Waypoint do nawigacji
+
 typedef struct
 {
 	uint16_t 	dist_cal;
@@ -95,14 +100,6 @@ typedef struct
 	void (*scr_open_exe)(void);
 	void (*scr_close_exe)(void);
 } screen_t;																		// Ekran na wyswietlaczu
-
-typedef struct
-{
-	uint8_t x;
-	uint8_t y;
-	uint8_t w;
-	uint8_t h;
-} rect_t;																		// Wymiary obiektu
 
 typedef struct
 {
@@ -145,10 +142,11 @@ uint16_t course;																// Aktualny kurs wg gps
 bool new_course;																// Flaga nowego kursu
 char gpx_file[24];																// Plik gpx z nagrywanym sladem
 bool trk_rec_flag;																// Flaga nagrywania pliku gpx
+wpt_t dest_wpt;																	// Waypoint do nawigacji
 
 void make_trt_mtx(point_t xy, float phi);										// Przygotowanie macierzy
 point_t mtx_mul_vec(float *mtx, point_t xy);									// Mnozenie macierzy
-void tftMsg(String message);
+void tftMsg(String message);													// Komunikat (o bledzie) na ekranie
 bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
 void everySecTask(void);														// Funkcja wykonywana co sekunde
 void mux_switch(enum MUX_STATES state);											// Przelaczenie multipleksera sygnalow
@@ -210,6 +208,7 @@ void meantimeSave(void);														// Zapis miedzyczas stopera
 void satCustomInit(void);														// Inicjalizacja statystyk satelitow
 void satUpdateStats(void);														// Aktualizacja statystyk satelitow
 void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r);				// Rysowanie igly kompasu
+void renderWpt(uint16_t course, point_t xy, uint8_t shift, uint16_t color);		// Rysowanie symbolu waypointa na horyzoncie
 void addWpt2Trk(void);															// Zapis WPT do trasy .gpx
 void addWpt2Wpt(bool reset_num);												// Zapis WPT do zbioru waypointow .gpx
 
