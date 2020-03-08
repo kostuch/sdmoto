@@ -50,7 +50,7 @@ WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
 SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
 SimpleList<String>	wptfile_lst;												// Lista plikow z waypointami
-	// Predkosciomierz do 150km/h
+// Predkosciomierz do 150km/h
 HGauge speed_gauge(&tft, 2, 74, 96, 16, TFT_BLACK, TFT_WHITE, TFT_RED, false, "", 1, G_PLAIN, 0, 150);
 // Woltomierz 10-16V
 HGauge volt_gauge(&tft, 2, 92, 96, 16, TFT_BLACK, TFT_WHITE, TFT_BLUE, false, "", 1, G_R2G, 10, 16);
@@ -1909,35 +1909,32 @@ void openWptFile()
 	clearWindow();
 	fs::Dir dir = SPIFFS.openDir("/");
 	wptfile_lst.clear();
-	tft.setTextColor(TFT_WHITE, TFT_BLACK);
-	tft.setCursor(0, 32);
-	tft.printf("Wybierz plik");
 
 	while (dir.next())															// Przejrzyj katalog
 	{
-		if (dir.fileName().endsWith(".gpx"))									// Wszystkie pliki gpx
-		{
-			wptfile_lst.push_back(dir.fileName());								// Dodaj do listy
-			//tft.setCursor(4, 32 + (wptfile_lst.size() * 8));					// Ustaw dla kazdego kursor
-
-			//if (dir.fileName().length() > 16) tft.print(dir.fileName().substring(1, 16));
-			//else tft.print(dir.fileName().substring(1));						// Bez pierwszego znaku, max 16 znakow
-
-			//if (wptfile_lst.size() > 9) break;									// Max 10 plikow gpx
-		}
+		if (dir.fileName().endsWith(".gpx")) wptfile_lst.push_back(dir.fileName()); // Wszystkie pliki gpx dodaj do listy
 	}
-	
-	if (wptfile_lst.size())														// Jezeli sa jakies pliki na liscie
+
+	if (wptfile_lst.size())														// Jezeli sa jakies pliki na liscie - listuj
 	{
-		cur_file = 0;
-		listWptFiles(cur_file);													// Listuj pliki poczawszy od pierwszego
+		tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+		tft.setCursor(6, 32);
+		tft.printf_P("Wybierz plik");
+		listWptFiles(cur_file);
 	}
-	else tft.printf_P("Brak plikow z waypointami!!!");
+	else 																		// Jak nie ma plikow
+	{
+		screen = SCR_NAVI;														// Wroc do ekranu nawigacji
+		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		tftMsg(F("Brak plikow gpx"));
+		delay(2000);															// NIE WIEM DLACZEGO OD RAZU RYSUJE KONTROLKI...
+	}
 }
 
 void listWptFiles(uint8_t file_pos)
 {
 	uint8_t files_set_no = file_pos / LIST_FILES_SET;							// Nr "Kompletu" plikow. Na ekranie miesci sie 9 nazw
+	tft.fillRect(0, 40, 120, 88, TFT_BLACK);
 	
 	if (wptfile_lst.size() > LIST_FILES_SET)									// Jezeli pliki nie mieszcza sie na ekranie
 	{
@@ -1949,23 +1946,24 @@ void listWptFiles(uint8_t file_pos)
 	tft.setCursor(0, 40);														// Listuj zawsze od gory
 	SimpleList<String>::iterator itr = wptfile_lst.begin() + (files_set_no * LIST_FILES_SET); // Odleglosc od poczatku listy w kompletach
 
-	for (uint8_t f = 0; f < LIST_FILES_SET; f++)								// Najwyzej #def plikow na ekranie
+	for (uint8_t file = 0; file < LIST_FILES_SET; file++)						// Najwyzej #def plikow na ekranie
 	{
-		uint8_t ff = (files_set_no * LIST_FILES_SET) + f;						// Pozycja w ramach kompletu
+		uint8_t file_num = (files_set_no * LIST_FILES_SET) + file;				// Pozycja pliku na liscie
 
-		if (ff == wptfile_lst.size()) break;									// Jezeli koniec listy plikow, przerwij listowanie
+		if (file_num == wptfile_lst.size()) break;								// Jezeli koniec listy plikow, przerwij listowanie
 		else
 		{
-			if (ff == file_pos)
+			if (file_num == file_pos)
 			{
-				tft.setTextColor(TFT_GREEN, TFT_BLACK);							// Biezacy plik listuj na zielono
+				tft.setTextColor(TFT_BLACK, TFT_YELLOW);						// Biezacy plik listuj na zielono
+				tft.setCursor(0, 40 + file * 8);
 				tft.print(F(">"));												// Wskaznik graficzny
 			}
-			else tft.setTextColor(TFT_WHITE, TFT_BLACK);						// Pozostale na bialo
+			else tft.setTextColor(TFT_GREEN, TFT_BLACK);						// Pozostale na bialo
 
-			debugI("%s", itr->c_str());
-			if (itr->length() > 20)	tft.drawString(itr->substring(1, 20), 6, 40 + ff * 8);
-			else tft.drawString(itr->substring(1), 6, 40 + ff * 8);
+			if (itr->length() > 20)	tft.drawString(itr->substring(1, 20), 6, 40 + file * 8);
+			else tft.drawString(itr->substring(1), 6, 40 + file * 8);
+
 			itr++;
 		}
 	}
@@ -2042,7 +2040,7 @@ void btnSaveTrk(bool on_off)
 {
 	if (!fix)
 	{
-		tftMsg(F("Brak FIXa!!! No TRK"));
+		tftMsg(F("Brak FIXa!!!"));
 		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		return;
 	}
@@ -2088,7 +2086,7 @@ void btnSaveWpt(bool on_off)
 {
 	if (!fix)
 	{
-		tftMsg(F("Brak FIXa!!! No WPT"));
+		tftMsg(F("Brak FIXa!!!"));
 		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		return;
 	}
@@ -2153,18 +2151,31 @@ void btnNav2Wpt(bool on_off)
 	} */
 }
 
-void prevWptFile(bool on_off)
+void btnPrevWptFile(bool on_off)
 {
+	if (cur_file > 0) cur_file--;												// Poprzedni plik z listy
+	else cur_file = wptfile_lst.size() - 1;										// Ostatni plik
 
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	listWptFiles(cur_file);
 }
-void nextWptFile(bool on_off)
+
+void btnNextWptFile(bool on_off)
 {
+	if (cur_file < (wptfile_lst.size() - 1)) cur_file++;						// Nastepny plik z listy
+	else cur_file = 0;															// Pierwszy plik
 
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	listWptFiles(cur_file);
 }
-void thisWptFile(bool on_off)
+
+void btnThisWptFile(bool on_off)
 {
-
+	// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
+	SimpleList<String>::iterator itr = wptfile_lst.begin() + cur_file;
+	if (on_off) debugI("Plik %s", itr->c_str());
 }
+
 void satUpdateStats()
 {
 	/*

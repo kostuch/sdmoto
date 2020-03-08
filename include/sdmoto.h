@@ -208,9 +208,9 @@ void btnSaveTrk(bool on_off);													// Przycisk "zapisuj track"
 void btnSaveWpt(bool on_off);													// Przycisk "zapis waypoint"
 void btnNav2Wpt(bool on_off);													// Przycisk "nawiguj do waypointa"
 void listWptFiles(uint8_t file_pos);
-void prevWptFile(bool on_off);
-void nextWptFile(bool on_off);
-void thisWptFile(bool on_off);
+void btnPrevWptFile(bool on_off);
+void btnNextWptFile(bool on_off);
+void btnThisWptFile(bool on_off);
 void renderCtrl(btn_t *ctrl);													// Rysuj kontrolke na ekranie
 void meantimeSave(void);														// Zapis miedzyczas stopera
 void satCustomInit(void);														// Inicjalizacja statystyk satelitow
@@ -228,9 +228,9 @@ const btn_t ctrls_data[] PROGMEM =
 	{2, 0, 3, 35, 74, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
 	{2, 1, 3, 49, 74, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
 	{2, 2, 3, 63, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
-	{7, 0, 120, 36, 40, 12, (char *) "Gora", (char *) "Gora", prevWptFile},
-	{7, 1, 120, 56, 40, 12, (char *) "Dol", (char *) "Dol", nextWptFile},
-	{7, 2, 120, 76, 40, 12, (char *) "OK", (char *) "", thisWptFile}
+	{7, 0, 128, 36, 28, 12, (char *) "Gora", (char *) "Gora", btnPrevWptFile},
+	{7, 1, 128, 56, 28, 12, (char *) "Dol", (char *) "Dol", btnNextWptFile},
+	{7, 2, 128, 86, 28, 12, (char *) "OK", (char *) "", btnThisWptFile}
 };
 
 const screen_t screen_data[] PROGMEM =
