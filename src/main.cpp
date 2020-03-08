@@ -16,6 +16,7 @@
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
 #include <SerialRAM.h>															// EERAM
+#include <TinyXML.h>															// Parser plikow gpx
 #include "TinyGPS++.h"															// GPS
 #include "sdmoto.h"																// Konfiguracja kompilacji
 #include "icons.h"																// Definicje ikon
@@ -1935,7 +1936,7 @@ void listWptFiles(uint8_t file_pos)
 {
 	uint8_t files_set_no = file_pos / LIST_FILES_SET;							// Nr "Kompletu" plikow. Na ekranie miesci sie 9 nazw
 	tft.fillRect(0, 40, 120, 88, TFT_BLACK);
-	
+
 	if (wptfile_lst.size() > LIST_FILES_SET)									// Jezeli pliki nie mieszcza sie na ekranie
 	{
 		tft.setCursor(6, 40 + 10 * 8);											// Na dole listy
@@ -2173,7 +2174,33 @@ void btnThisWptFile(bool on_off)
 {
 	// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
 	SimpleList<String>::iterator itr = wptfile_lst.begin() + cur_file;
-	if (on_off) debugI("Plik %s", itr->c_str());
+
+	if (on_off)
+	{
+		debugI("Plik %s", itr->c_str());
+		TinyXML gpx_xml;
+		uint8_t buffer[150];													// Bufor dekodera XML
+		gpx_xml.init((uint8_t *)buffer, sizeof(buffer), &XML_callback);			// Inicjalizacja
+		gpx_xml.reset();														// wtf?
+		SPIFFS_file = SPIFFS.open(itr->c_str(), "r");							// Otworz gpx
+
+		while (SPIFFS_file.available())
+		{
+			char c = SPIFFS_file.read();
+			gpx_xml.processChar(c);												// Czytaj plik i dekoduj
+		}
+
+		SPIFFS_file.close();
+	}
+}
+
+void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen)
+{
+	//SimpleList<wpt_t> wpt_lst;
+	
+	if ((statusflags & STATUS_ATTR_TEXT) && (!strcasecmp(tagName, "lat") || !strcasecmp(tagName, "lon")))
+	debugI("Dane xml gpx: %s=%f", tagName, atof(data));
+	//wpt_lst.push_back((wpt_t) {"xxx", lat, lon});
 }
 
 void satUpdateStats()

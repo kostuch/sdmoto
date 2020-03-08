@@ -146,6 +146,7 @@ bool trk_rec_flag;																// Flaga nagrywania pliku gpx
 wpt_t dest_wpt;																	// Waypoint do nawigacji
 uint8_t cur_file;																// Biezacy plik listingu
 
+void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen);
 void make_trt_mtx(point_t xy, float phi);										// Przygotowanie macierzy
 point_t mtx_mul_vec(float *mtx, point_t xy);									// Mnozenie macierzy
 void tftMsg(String message);													// Komunikat (o bledzie) na ekranie
