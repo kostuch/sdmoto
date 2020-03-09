@@ -52,8 +52,10 @@
 #define TIMER_REFRESH	55														// Czas odswiezania stopera [ms]
 #define COURSE_DIFF		3														// Minimalna zmiana kursu dla przerysowania kompasu
 #define REC_WPT			5														// Ilosc sekund miedzy zapisem WPT do .gpx
-#define WPT_NAME_LEN	8														// Dlugosc nazwy waypointa do nawigacji
-#define LIST_FILES_SET	10														// Ilosc plikow mieszczacych sie na listingu
+#define WPT_NAME_LEN	10														// Dlugosc nazwy waypointa do nawigacji
+#define RTE_NAME_LEN	11														// Dlugosc nazwy routy
+#define TRK_NAME_LEN	11														// Dlugosc nazwy tracka
+#define LIST_FILES_SET	11														// Ilosc plikow mieszczacych sie na listingu
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
@@ -75,6 +77,18 @@ typedef struct
 	float		wpt_lat;
 	float		wpt_lon;
 } wpt_t;																		// Waypoint do nawigacji
+
+typedef struct
+{
+	char		rte_name[RTE_NAME_LEN];
+	uint16_t 	rte_size;
+} rte_t;
+
+typedef struct
+{
+	char		trk_name[TRK_NAME_LEN];
+	uint16_t 	trk_size;
+} trk_t;
 
 typedef struct
 {
@@ -145,6 +159,7 @@ char gpx_file[24];																// Plik gpx z nagrywanym sladem
 bool trk_rec_flag;																// Flaga nagrywania pliku gpx
 wpt_t dest_wpt;																	// Waypoint do nawigacji
 uint8_t cur_file;																// Biezacy plik listingu
+uint16_t file_wpts, file_rtes, file_trks;
 
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen);
 void make_trt_mtx(point_t xy, float phi);										// Przygotowanie macierzy

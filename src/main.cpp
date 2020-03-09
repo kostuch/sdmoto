@@ -49,8 +49,11 @@ WiFiEventHandler	SAPstationDisconnectedHandler;
 WiFiEventHandler	STAstationGotIPHandler;
 WiFiEventHandler	STAstationDisconnectedHandler;
 WiFiEventHandler	wifiModeChanged;
-SimpleList<btn_t>	ctrl_list;													// Lista kontrolek (przyciskow) na ekranie
+SimpleList<btn_t>	ctrl_lst;													// Lista kontrolek (przyciskow) na ekranie
 SimpleList<String>	wptfile_lst;												// Lista plikow z waypointami
+SimpleList<wpt_t>	wpt_lst;
+SimpleList<rte_t>	rte_lst;
+SimpleList<trk_t>	trk_lst;
 // Predkosciomierz do 150km/h
 HGauge speed_gauge(&tft, 2, 74, 96, 16, TFT_BLACK, TFT_WHITE, TFT_RED, false, "", 1, G_PLAIN, 0, 150);
 // Woltomierz 10-16V
@@ -1182,7 +1185,7 @@ void keyShortPress(enum BUTTONS button)
 			}
 			else
 			{
-				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+				SimpleList<btn_t>::iterator idx = ctrl_lst.begin();
 
 				if (!(ctrl_state[screen][1] & 0x80))							// Jezeli (zadna) kontrolka nie jest aktywna (nieustawione MSB)
 				{
@@ -1214,7 +1217,7 @@ void keyShortPress(enum BUTTONS button)
 			if (btn_mode == CHG_SCR) nextScr();									// Nastepny ekran
 			else																// Nastepna kontrolka
 			{
-				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+				SimpleList<btn_t>::iterator idx = ctrl_lst.begin();
 
 				if (ctrl_state[screen][0] > 0)									// Jezeli jeszcze jakies dostepne kontrolki
 				{
@@ -1223,7 +1226,7 @@ void keyShortPress(enum BUTTONS button)
 				}
 				else
 				{
-					ctrl_state[screen][0] = ctrl_list.size() - 1;				// Albo od konca
+					ctrl_state[screen][0] = ctrl_lst.size() - 1;				// Albo od konca
 					renderCtrl(idx);											// Usun focus z pierwszej
 				}
 
@@ -1237,9 +1240,9 @@ void keyShortPress(enum BUTTONS button)
 			if (btn_mode == CHG_SCR) prevScr();									// Poprzedni ekran
 			else 																// Poprzednia kontrolka
 			{
-				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+				SimpleList<btn_t>::iterator idx = ctrl_lst.begin();
 
-				if (ctrl_state[screen][0] < (ctrl_list.size() - 1))				// Jezeli jeszcze jakies dostepne kontrolki
+				if (ctrl_state[screen][0] < (ctrl_lst.size() - 1))				// Jezeli jeszcze jakies dostepne kontrolki
 				{
 					ctrl_state[screen][0]++;		 							// Nastepna
 					renderCtrl((idx + ctrl_state[screen][0]) - 1);				// Usun focus ze starej
@@ -1247,7 +1250,7 @@ void keyShortPress(enum BUTTONS button)
 				else
 				{
 					ctrl_state[screen][0] = 0;									// Albo od poczatku
-					renderCtrl(idx + ctrl_list.size() - 1);						// Usun focus z ostatniej
+					renderCtrl(idx + ctrl_lst.size() - 1);						// Usun focus z ostatniej
 				}
 
 				renderCtrl(idx + ctrl_state[screen][0]);
@@ -1299,9 +1302,9 @@ void keyLongPress(enum BUTTONS button)
 		case BTN_RT:
 		case BTN_DN:
 		case BTN_LT:
-			if (ctrl_list.size())												// Jezeli dla ekranu sa jakiekolwiek przyciski
+			if (ctrl_lst.size())												// Jezeli dla ekranu sa jakiekolwiek przyciski
 			{
-				SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+				SimpleList<btn_t>::iterator idx = ctrl_lst.begin();
 
 				if (btn_mode == CHG_SCR)
 				{
@@ -1442,19 +1445,19 @@ void openScreen(enum SCREENS scr, bool remember)
 
 	if (screen_buf.scr_open_exe) screen_buf.scr_open_exe();						// Uruchom funkcje skojarzona z otwarciem nowego ekranu
 
-	ctrl_list.clear();															// Wyczysc stara liste przyciskow
+	ctrl_lst.clear();															// Wyczysc stara liste przyciskow
 
 	// Jezeli sa jakies przyciski, to utworz z nich liste
 	for (uint8_t btn = 0; btn < sizeof(ctrls_data) / sizeof(btn_t); btn++)		// Przejrzyj wszystkie przyciski we FLASH
 	{
 		memcpy_P(&key_buf, &ctrls_data[btn], sizeof(key_buf));					// Kopiowanie definicji przycisku z FLASH do RAM
 
-		if (key_buf.screen_id == screen) ctrl_list.push_back(key_buf);			// Dodaj przycisk do listy jezeli nalezy do ekranu
+		if (key_buf.screen_id == screen) ctrl_lst.push_back(key_buf);			// Dodaj przycisk do listy jezeli nalezy do ekranu
 	}
 
-	SimpleList<btn_t>::iterator idx = ctrl_list.begin();
+	SimpleList<btn_t>::iterator idx = ctrl_lst.begin();
 
-	for (uint8_t i = 0; i < ctrl_list.size(); i++, idx++)						// Rysuj kontrolki
+	for (uint8_t i = 0; i < ctrl_lst.size(); i++, idx++)						// Rysuj kontrolki
 		renderCtrl(idx);
 
 	renderScreen(screen);
@@ -2055,7 +2058,9 @@ void btnSaveTrk(bool on_off)
 		                    "<gpx version=\"1.1\" creator=\"SDMoto\" xmlns=\"http://www.topografix.com/GPX/1/1\" "
 		                    "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
 		                    "xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">\r\n"
-		                    "\t<trk>\r\n\t\t<trkseg>\r\n"));
+		                    "\t<trk>\r\n"));
+		SPIFFS_file.printf_P("\t<name>trk%02d-%02d</name>\r\n", (gps.time.hour() + conf.getInt("tz")) % 24, gps.time.minute());
+		SPIFFS_file.print(F("\t\t<trkseg>\r\n"));
 		SPIFFS_file.print(F("\t\t</trkseg>\r\n\t</trk>\r\n</gpx>\r\n"));		// 30 znakow na koncu!!!
 		SPIFFS_file.close();
 		addWpt2Trk();															// Pierwszy waypoint od razu
@@ -2173,16 +2178,22 @@ void btnNextWptFile(bool on_off)
 void btnThisWptFile(bool on_off)
 {
 	// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
-	SimpleList<String>::iterator itr = wptfile_lst.begin() + cur_file;
+	wpt_lst.clear();															// Wyczysc listy waypointow
+	rte_lst.clear();															// Routow
+	trk_lst.clear();															// Trackow
+	SimpleList<String>::iterator itr_f = wptfile_lst.begin() + cur_file;
 
 	if (on_off)
 	{
-		debugI("Plik %s", itr->c_str());
+		file_wpts = 0;															// Init licznikow
+		file_rtes = 0;
+		file_trks = 0;
+		debugI("Plik %s", itr_f->c_str());
 		TinyXML gpx_xml;
 		uint8_t buffer[150];													// Bufor dekodera XML
 		gpx_xml.init((uint8_t *)buffer, sizeof(buffer), &XML_callback);			// Inicjalizacja
 		gpx_xml.reset();														// wtf?
-		SPIFFS_file = SPIFFS.open(itr->c_str(), "r");							// Otworz gpx
+		SPIFFS_file = SPIFFS.open(itr_f->c_str(), "r");							// Otworz gpx
 
 		while (SPIFFS_file.available())
 		{
@@ -2191,16 +2202,114 @@ void btnThisWptFile(bool on_off)
 		}
 
 		SPIFFS_file.close();
+		// DEBUG
+		debugI("Waypoints: %d Routes: %d Tracks: %d", file_wpts, file_rtes, file_trks);
+		SimpleList<wpt_t>::iterator itw = wpt_lst.begin();							// DEBUG
+
+		for (size_t i = 0; i < wpt_lst.size(); i++, itw++) debugI("WPT: NAME=%s LAT=%f LON=%.5f", itw->wpt_name, itw->wpt_lat, itw->wpt_lon);
+
+		SimpleList<rte_t>::iterator itr = rte_lst.begin();							// DEBUG
+
+		for (size_t i = 0; i < rte_lst.size(); i++, itr++) debugI("RTE: NAME=%s SIZE:%d", itr->rte_name, itr->rte_size);
+
+		SimpleList<trk_t>::iterator itt = trk_lst.begin();							// DEBUG
+
+		for (size_t i = 0; i < trk_lst.size(); i++, itt++) debugI("TRK: NAME=%s SIZE:%d", itt->trk_name, itt->trk_size);
 	}
 }
 
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen)
 {
-	//SimpleList<wpt_t> wpt_lst;
-	
-	if ((statusflags & STATUS_ATTR_TEXT) && (!strcasecmp(tagName, "lat") || !strcasecmp(tagName, "lon")))
-	debugI("Dane xml gpx: %s=%f", tagName, atof(data));
-	//wpt_lst.push_back((wpt_t) {"xxx", lat, lon});
+	static wpt_t temp_wpt;
+	static rte_t temp_rte;
+	static trk_t temp_trk;
+	static uint8_t waypoint_state, route_state, track_state;
+	static uint16_t rte_size, trk_size;
+
+	/*
+		if (statusflags & STATUS_START_TAG) debugI("XML Start TAG: tagname=%s", tagName);
+
+		if (statusflags & STATUS_TAG_TEXT) debugI("XML TAG text: tagname=%s data=%s", tagName, data);
+
+		if (statusflags & STATUS_ATTR_TEXT) debugI("XML ATTR text: tagname=%s data=%s", tagName, data);
+
+		if (statusflags & STATUS_END_TAG) debugI("XML End TAG: tagname=%s", tagName);
+	 */
+	// WPT
+	if ((statusflags & STATUS_START_TAG) && (!strcasecmp(tagName, "/gpx/wpt")) && waypoint_state == 0)
+	{
+		waypoint_state = 1;														// Nowy waypoint
+		return;
+	}
+
+	if ((statusflags & STATUS_ATTR_TEXT) && (!strcasecmp(tagName, "lat")) && waypoint_state == 1)
+	{
+		temp_wpt.wpt_lat = atof(data);
+		waypoint_state = 2;														// Jest LAT
+		return;
+	}
+
+	if ((statusflags & STATUS_ATTR_TEXT) && (!strcasecmp(tagName, "lon")) && waypoint_state == 2)
+	{
+		temp_wpt.wpt_lon = atof(data);
+		waypoint_state = 3;														// Jest LON
+		return;
+	}
+
+	if ((statusflags & STATUS_TAG_TEXT) && (!strcasecmp(tagName, "/gpx/wpt/name")) && waypoint_state == 3)
+	{
+		strncpy(temp_wpt.wpt_name, data, WPT_NAME_LEN - 1);						// Skopiuj nazwe waypointa
+		waypoint_state = 0;														// Jest nazwa
+		wpt_lst.push_back(temp_wpt);											// Dodaj waypoint do listy
+		file_wpts++;															// Zwieksz licznik waypointow
+		return;
+	}
+
+	// RTE
+	if ((statusflags & STATUS_TAG_TEXT) && (!strcasecmp(tagName, "/gpx/rte/name")) && route_state == 0)
+	{
+		strncpy(temp_rte.rte_name, data, RTE_NAME_LEN - 1);						// Skopiuj nazwe routy
+		route_state = 1;
+		file_rtes++;															// Zwieksz licznik routow
+		rte_size = 0;															// Wyzeruj licznik rozmiaru routy
+		return;
+	}
+
+	if ((statusflags & STATUS_START_TAG) && (!strcasecmp(tagName, "/gpx/rte/rtept")) && route_state == 1)
+	{
+		rte_size++;																// Nowy punkt route
+		return;
+	}
+
+	if (statusflags & STATUS_END_TAG && (!strcasecmp(tagName, "/gpx/rte")) && route_state == 1)
+	{
+		route_state = 0;														// Koniec routy
+		temp_rte.rte_size = rte_size;											// Uaktualnij rozmiar routy
+		rte_lst.push_back(temp_rte);											// Dodaj route do listy
+	}
+
+	// TRK
+	if ((statusflags & STATUS_TAG_TEXT) && (!strcasecmp(tagName, "/gpx/trk/name")) && track_state == 0)
+	{
+		strncpy(temp_trk.trk_name, data, TRK_NAME_LEN - 1);						// Skopiuj nazwe tracka
+		track_state = 1;
+		file_trks++;															// Zwieksz licznik trackow
+		trk_size = 0;															// Wyzeruj licznik rozmiaru tracka
+		return;
+	}
+
+	if ((statusflags & STATUS_START_TAG) && (!strcasecmp(tagName, "/gpx/trk/trkseg/trkpt")) && track_state == 1)
+	{
+		trk_size++;																// Nowy punkt tracka
+		return;
+	}
+
+	if (statusflags & STATUS_END_TAG && (!strcasecmp(tagName, "/gpx/trk")) && track_state == 1)
+	{
+		track_state = 0;														// Koniec tracka
+		temp_trk.trk_size = trk_size;											// Uaktualnij rozmiar tracka
+		trk_lst.push_back(temp_trk);											// Dodaj track do listy
+	}
 }
 
 void satUpdateStats()
