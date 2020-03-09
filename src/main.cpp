@@ -1929,7 +1929,6 @@ void openWptFile()
 	else 																		// Jak nie ma plikow
 	{
 		screen = SCR_NAVI;														// Wroc do ekranu nawigacji
-		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		tftMsg(F("Brak plikow gpx"));
 		delay(2000);															// NIE WIEM DLACZEGO OD RAZU RYSUJE KONTROLKI...
 	}
@@ -1975,6 +1974,10 @@ void listWptFiles(uint8_t file_pos)
 
 void openWpt()
 {
+	clearWindow();
+	tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+	tft.setCursor(6, 32);
+	tft.printf_P("Wybierz waypoint");
 }
 
 void openCombo()
@@ -2139,11 +2142,9 @@ void btnNav2Wpt(bool on_off)
 		return;
 	}
 
-	if (on_off)
-	{
-		screen = SCR_FILES;
-		openScreen(screen, false);
-	}
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	screen = SCR_FILES;
+	openScreen(screen, false);
 
 	/*
 	if (on_off)
@@ -2182,40 +2183,47 @@ void btnThisWptFile(bool on_off)
 	rte_lst.clear();															// Routow
 	trk_lst.clear();															// Trackow
 	SimpleList<String>::iterator itr_f = wptfile_lst.begin() + cur_file;
+	file_wpts = 0;															// Init licznikow
+	file_rtes = 0;
+	file_trks = 0;
+	debugI("Plik %s", itr_f->c_str());
+	TinyXML gpx_xml;
+	uint8_t buffer[150];													// Bufor dekodera XML
+	gpx_xml.init((uint8_t *)buffer, sizeof(buffer), &XML_callback);			// Inicjalizacja
+	gpx_xml.reset();														// wtf?
+	SPIFFS_file = SPIFFS.open(itr_f->c_str(), "r");							// Otworz gpx
 
-	if (on_off)
+	while (SPIFFS_file.available())
 	{
-		file_wpts = 0;															// Init licznikow
-		file_rtes = 0;
-		file_trks = 0;
-		debugI("Plik %s", itr_f->c_str());
-		TinyXML gpx_xml;
-		uint8_t buffer[150];													// Bufor dekodera XML
-		gpx_xml.init((uint8_t *)buffer, sizeof(buffer), &XML_callback);			// Inicjalizacja
-		gpx_xml.reset();														// wtf?
-		SPIFFS_file = SPIFFS.open(itr_f->c_str(), "r");							// Otworz gpx
-
-		while (SPIFFS_file.available())
-		{
-			char c = SPIFFS_file.read();
-			gpx_xml.processChar(c);												// Czytaj plik i dekoduj
-		}
-
-		SPIFFS_file.close();
-		// DEBUG
-		debugI("Waypoints: %d Routes: %d Tracks: %d", file_wpts, file_rtes, file_trks);
-		SimpleList<wpt_t>::iterator itw = wpt_lst.begin();							// DEBUG
-
-		for (size_t i = 0; i < wpt_lst.size(); i++, itw++) debugI("WPT: NAME=%s LAT=%f LON=%.5f", itw->wpt_name, itw->wpt_lat, itw->wpt_lon);
-
-		SimpleList<rte_t>::iterator itr = rte_lst.begin();							// DEBUG
-
-		for (size_t i = 0; i < rte_lst.size(); i++, itr++) debugI("RTE: NAME=%s SIZE:%d", itr->rte_name, itr->rte_size);
-
-		SimpleList<trk_t>::iterator itt = trk_lst.begin();							// DEBUG
-
-		for (size_t i = 0; i < trk_lst.size(); i++, itt++) debugI("TRK: NAME=%s SIZE:%d", itt->trk_name, itt->trk_size);
+		char c = SPIFFS_file.read();
+		gpx_xml.processChar(c);													// Czytaj plik i dekoduj
 	}
+
+	SPIFFS_file.close();
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	// DEBUG
+	debugI("Waypoints: %d Routes: %d Tracks: %d", file_wpts, file_rtes, file_trks);
+	SimpleList<wpt_t>::iterator itw = wpt_lst.begin();							// DEBUG
+
+	for (size_t i = 0; i < wpt_lst.size(); i++, itw++) debugI("WPT: NAME=%s LAT=%f LON=%.5f", itw->wpt_name, itw->wpt_lat, itw->wpt_lon);
+
+	SimpleList<rte_t>::iterator itr = rte_lst.begin();							// DEBUG
+
+	for (size_t i = 0; i < rte_lst.size(); i++, itr++) debugI("RTE: NAME=%s SIZE:%d", itr->rte_name, itr->rte_size);
+
+	SimpleList<trk_t>::iterator itt = trk_lst.begin();							// DEBUG
+
+	for (size_t i = 0; i < trk_lst.size(); i++, itt++) debugI("TRK: NAME=%s SIZE:%d", itt->trk_name, itt->trk_size);
+
+	screen = SCR_WPTS;
+	openScreen(screen, false);													// Przejscie do ekranu listy waypointow
+}
+
+void btnCancelFile(bool on_off)
+{
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	screen = SCR_NAVI;															// Powrot do ekranu glownego nawigacji
+	openScreen(screen, true);
 }
 
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen)
@@ -2310,6 +2318,22 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 		temp_trk.trk_size = trk_size;											// Uaktualnij rozmiar tracka
 		trk_lst.push_back(temp_trk);											// Dodaj track do listy
 	}
+}
+
+void btnPrevWpt(bool on_off)
+{
+}
+void btnNextWpt(bool on_off)
+{
+}
+void btnThisWpt(bool on_off)
+{
+}
+void btnCancelWpt(bool on_off)
+{
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
+	openScreen(screen, false);
 }
 
 void satUpdateStats()

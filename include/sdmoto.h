@@ -146,8 +146,7 @@ uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lok
 uint8_t speed;																	// Predkosc
 uint16_t volt;																	// Napiecie
 uint32_t tmr_start_time;														// Czas stoperowy
-uint8_t ctl_pos[5];																// Tablica pozycji aktywnego przycisku na ekranie
-uint8_t ctrl_state[5][2];														// 5 ekranow, pozycja ramki, nr aktywnej kontrolki
+uint8_t ctrl_state[8][2];														// 5 ekranow, pozycja ramki, nr aktywnej kontrolki
 uint32_t tmr_ms;																// Liczba milisekund stopera
 uint32_t tmr_sec_num;															// Liczba sekund stopera
 uint8_t tmr_hrs, tmr_mins, tmr_secs, tmr_frac;									// Stoper: godziny, minuty, sekundy, ulamki
@@ -223,10 +222,15 @@ void btnStopStart(bool on_off);													// Przycisk "start/stop" na metromie
 void btnSaveTrk(bool on_off);													// Przycisk "zapisuj track"
 void btnSaveWpt(bool on_off);													// Przycisk "zapis waypoint"
 void btnNav2Wpt(bool on_off);													// Przycisk "nawiguj do waypointa"
-void listWptFiles(uint8_t file_pos);
-void btnPrevWptFile(bool on_off);
-void btnNextWptFile(bool on_off);
-void btnThisWptFile(bool on_off);
+void listWptFiles(uint8_t file_pos);											// Listowanie plikow .gpx
+void btnPrevWptFile(bool on_off);												// Przycisk "nastepny plik z listy"
+void btnNextWptFile(bool on_off);												// Przycisk "poprzedni plik z listy"
+void btnThisWptFile(bool on_off);												// Przycisk "OK" wybor pliku gpx
+void btnCancelFile(bool on_off);												// Przycisk rezygnacji z wyboru pliku
+void btnPrevWpt(bool on_off);
+void btnNextWpt(bool on_off);
+void btnThisWpt(bool on_off);
+void btnCancelWpt(bool on_off);
 void renderCtrl(btn_t *ctrl);													// Rysuj kontrolke na ekranie
 void meantimeSave(void);														// Zapis miedzyczas stopera
 void satCustomInit(void);														// Inicjalizacja statystyk satelitow
@@ -246,7 +250,12 @@ const btn_t ctrls_data[] PROGMEM =
 	{2, 2, 3, 63, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
 	{7, 0, 128, 36, 28, 12, (char *) "Gora", (char *) "Gora", btnPrevWptFile},
 	{7, 1, 128, 56, 28, 12, (char *) "Dol", (char *) "Dol", btnNextWptFile},
-	{7, 2, 128, 86, 28, 12, (char *) "OK", (char *) "", btnThisWptFile}
+	{7, 2, 128, 86, 28, 12, (char *) "OK", (char *) "", btnThisWptFile},
+	{7, 3, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelFile},
+	{8, 0, 128, 36, 28, 12, (char *) "^", (char *) "^", btnPrevWpt},
+	{8, 1, 128, 56, 28, 12, (char *) "v", (char *) "v", btnNextWpt},
+	{8, 2, 128, 86, 28, 12, (char *) "NAV", (char *) "", btnThisWpt},
+	{8, 3, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelWpt}
 };
 
 const screen_t screen_data[] PROGMEM =
