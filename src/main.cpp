@@ -1937,10 +1937,10 @@ void openWptFile()
 
 void listWptFiles(uint8_t file_pos)
 {
-	uint8_t files_set_no = file_pos / LIST_FILES_SET;							// Nr "Kompletu" plikow. Na ekranie miesci sie 9 nazw
+	uint8_t files_set_no = file_pos / LIST_FILES_LEN;							// Nr "Kompletu" plikow. Na ekranie miesci sie 9 nazw
 	tft.fillRect(0, 40, 120, 88, TFT_BLACK);
 
-	if (wptfile_lst.size() > LIST_FILES_SET)									// Jezeli pliki nie mieszcza sie na ekranie
+	if (wptfile_lst.size() > LIST_FILES_LEN)									// Jezeli pliki nie mieszcza sie na ekranie
 	{
 		tft.setCursor(6, 40 + 10 * 8);											// Na dole listy
 		tft.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -1948,11 +1948,11 @@ void listWptFiles(uint8_t file_pos)
 	}
 
 	tft.setCursor(0, 40);														// Listuj zawsze od gory
-	SimpleList<String>::iterator itr = wptfile_lst.begin() + (files_set_no * LIST_FILES_SET); // Odleglosc od poczatku listy w kompletach
+	SimpleList<String>::iterator itr = wptfile_lst.begin() + (files_set_no * LIST_FILES_LEN); // Odleglosc od poczatku listy w kompletach
 
-	for (uint8_t file = 0; file < LIST_FILES_SET; file++)						// Najwyzej #def plikow na ekranie
+	for (uint8_t file = 0; file < LIST_FILES_LEN; file++)						// Najwyzej #def plikow na ekranie
 	{
-		uint8_t file_num = (files_set_no * LIST_FILES_SET) + file;				// Pozycja pliku na liscie
+		uint8_t file_num = (files_set_no * LIST_FILES_LEN) + file;				// Pozycja pliku na liscie
 
 		if (file_num == wptfile_lst.size()) break;								// Jezeli koniec listy plikow, przerwij listowanie
 		else
