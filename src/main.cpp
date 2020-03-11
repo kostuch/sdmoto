@@ -12,7 +12,7 @@
 #include <ESP8266HTTPClient.h>													// OTA http://www.skeletondevices.com
 #include <ESP8266httpUpdate.h>													// OTA http://www.skeletondevices.com
 #include "SimpleList.h"															// Obsluga list dynamicznych
-//#include <TJpg_Decoder.h>														// Dekoder jpg
+#include <TJpg_Decoder.h>														// Dekoder jpg
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
 #include <SerialRAM.h>															// EERAM
@@ -97,23 +97,23 @@ void setup()
 	initWiFi();																	// Init WiFi (nieblokujacy)
 	tft.init(NULL, tft_cs, NULL, NULL);											// Init TFT (DC, CS, RST, TCS, CS via driver)
 	tft.setRotation(1);															// Landscape
-	tft.fillScreen(TFT_BLACK);													// CLS
 	calibration.dist_cal = eeram_read16(DIST_CAL);								// Odczyt kalibracji dystansu (dla impulsatora)
 	calibration.volt_cal = eeram_read16(VOLT_CAL);								// Odczyt kalibracji napiecia
 	calibration.temp_cal = eeram_read16(TEMP_CAL);								// Odczyt kalibracji temperatury
 	calibration.bright_cal = eeram_read16(BRIGHT_CAL);							// Odczyt kalibracji jasnosci
 	analogWrite(BL_PIN, calibration.bright_cal);								// TFT podswietlenie wg kalibracji
+	renderScreen(SCR_WELCOME);													// Pokaz wizytowke
+	delay(4000);																// Chwila...
+	tft.fillScreen(TFT_BLACK);													// CLS
 	renderToolbar(WIFI_XOFF);													// Ikona WiFi
 	renderToolbar(GPS_NOFIX);													// Ikona GPS
 	SPIFFS_list();																// Ikona pamieci wg zajetosci
 
 	if (!sd.begin(SD_CONFIG)) renderToolbar(SD_OFF);							// Brak karty SD
-	else if (!dir.open("/")) renderToolbar(SD_NOOK);							// Karta bez /
+	else if (!dir.open("/")) renderToolbar(SD_NOOK);							// Karta bez filesystemu
 	else renderToolbar(SD_OK);													// Karta OK
 
 	renderToolbar(GPS_DATETIME);												// Czas
-	renderScreen(SCR_WELCOME);													// Pokaz wizytowke
-	delay(2000);																// Chwila...
 	pulses_cnt1 = eeram_read32(DIST1);											// Odczyt dystansu odcinka
 	pulses_cnt2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
 	computeDistance();															// Oblicz dystans
@@ -671,7 +671,9 @@ void initWiFiStaAp()
 		startWebServer();															// Wystartuj Serwer www
 		debugInit();
 		//Serial.print(F("Serwer www RUN at Sta IP:"));
-		//Serial.println(WiFi.localIP());
+		tft.setCursor(TBARX_WIFI + 16, 0);
+		tft.setTextColor(TFT_WHITE, TFT_BLACK);
+		tft.print(WiFi.localIP().toString().substring(WiFi.localIP().toString().lastIndexOf('.') + 1, WiFi.localIP().toString().length()));
 	}
 }
 
@@ -1372,6 +1374,8 @@ void prevScr()
 			break;
 
 		default:
+			screen = SCR_NAVI;													// Wyjscie z podekranow nawigacji
+			navi_state = NO_TARGET;												// Wylacz tryb nawigacji
 			break;
 	}
 
@@ -1423,7 +1427,8 @@ void nextScr()
 			break;
 
 		default:
-			screen = SCR_DIST;
+			screen = SCR_NAVI;													// Wyjscie z podekranow nawigacji
+			navi_state = NO_TARGET;												// Wylacz tryb nawigacji
 			break;
 	}
 
@@ -1480,14 +1485,13 @@ void renderScreen(enum SCREENS scr)
 			break;
 
 		case SCR_WELCOME:
-			/* TJpgDec.setJpgScale(1);
+			TJpgDec.setJpgScale(1);
 			TJpgDec.setSwapBytes(true);
 			TJpgDec.setCallback(tftImgOutput);
-			TJpgDec.drawFsJpg(0, 0, "/skeleton.jpg");
-			*/
-			tft.setCursor(10, TFT_HEIGHT / 2);
-			tft.setTextColor(TFT_WHITE, TFT_BLACK);
-			tft.setTextSize(2);
+			TJpgDec.drawFsJpg(0, 0, "/logogray160x128.jpg");					// Obrazek powitalny
+			tft.setCursor(160 - 10 * 6, TFT_HEIGHT / 2 + 8);
+			tft.setTextColor(TFT_GREENYELLOW);
+			tft.setTextSize(1);
 			tft.printf("FW: %d", FW_VERSION);
 			break;
 
@@ -1577,39 +1581,43 @@ void renderScreen(enum SCREENS scr)
 				tft.setTextSize(2);
 				tft.setCursor(4, 94);
 				tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-				tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);		// Dystans odcinka
+				tft.printf_P("%4d.%03d", distance1 / 1000, distance1 % 1000);	// Dystans odcinka
 				tft.setCursor(4, 110);
 				tft.setTextColor(TFT_GOLD, TFT_BLACK);
-				tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);	// Dystans globalny
-				tft.setTextSize(1);
-				/* 				if (new_course)													// Nowy kurs
-								{
-									renderCompassNeedle(course, (point_t) {122, 70}, 30);		// Przerysuj igle kompasu
-									tft.setCursor(122, 96);										// Napisz pod horyzontem kurs
-									tft.printf_P("%3d%c", (int) gps.course.deg(), 247);			// Symbol stopni
-									tft.setCursor(122, 104);
-									tft.printf_P("%-3s", gps.cardinal(course));					// Wyrownanie do lewej (i jednoczesnie kasowanie)
-									new_course = false;											// Skasuj flage
-								}
-				 */
+				tft.printf_P("%04d.%03d", distance2 / 1000, distance2 % 1000);	// Dystans globalny
 			}
 			else
 			{
 				// Odleglosc od waypointa (w metrach)
-				uint32_t distance_to = gps.distanceBetween(gps.location.lat(), gps.location.lng(), dest_wpt.wpt_lat, dest_wpt.wpt_lon);
+				uint32_t distance_to = gps.distanceBetween(gps.location.lat(), gps.location.lng(), dest_wpt.lat, dest_wpt.lon);
 				// Kurs na waypoint
-				uint16_t course_to = (uint16_t) gps.courseTo(gps.location.lat(), gps.location.lng(), dest_wpt.wpt_lat, dest_wpt.wpt_lon);
+				uint16_t course_to = (uint16_t) gps.courseTo(gps.location.lat(), gps.location.lng(), dest_wpt.lat, dest_wpt.lon);
 
 				if ((distance_to != old_distance_to) || (course_to != old_course_to))
 				{
-					tft.setTextSize(2);
-					tft.setCursor(4, 94);
 					tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-					tft.printf("WPT za %03d", distance_to);							// Dystans do celu (waypointa)
+					tft.setCursor(4, 86);
+					tft.printf_P("Cel: %s", dest_wpt.name);
+					tft.setCursor(4, 94);
+
+					if (distance_to < 1000)	tft.printf_P("WPT: %03dm  ", distance_to);			// Dystans do celu (waypointa)
+					else tft.printf_P("WPT: %02d,%dkm", distance_to / 1000, (distance_to % 1000) / 100);
+
+					tft.setCursor(4, 102);
+
+					// Godzin i minut do celu
+					if (gps.speed.kmph() > 1)
+					{
+						uint8_t h = distance_to / 1000 / gps.speed.kmph();
+						uint8_t m = (uint8_t)(distance_to / 1000 / gps.speed.kmph() * 60) % 60;
+						tft.printf_P("ETA: %02d:%02d", h, m);
+					}
+					else tft.printf_P("ETA: --:--");
 
 					// W zaleznosci od odleglosci do waypointa, zaznacz go innym kolorem i w innej pozycji wzgledem horyzontu
-					if (distance_to > 2000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 34, TFT_RED);
-					else if (distance_to > 1000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 26, TFT_YELLOW);
+					if (distance_to > 2000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 34, TFT_WHITE);
+					else if (distance_to > 1000) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 34, TFT_RED);
+					else if (distance_to > 500) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 26, TFT_YELLOW);
 					else if (distance_to > 250) renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 18, TFT_GREENYELLOW);
 					else renderWpt(old_course_to - gps.course.deg(), (point_t) {122, 70}, 10, TFT_GREEN);
 					old_distance_to = distance_to;
@@ -1617,6 +1625,7 @@ void renderScreen(enum SCREENS scr)
 				}
 			}
 
+			tft.setTextSize(1);
 			break;
 
 		case SCR_COMBO:
@@ -1808,6 +1817,18 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			tft.drawBitmap(TBARX_SD, 0, sd_sym, 32, 32, TFT_DARKGREY);
 			break;
 
+		case REC_ON:
+			tft.setCursor(TBARX_TIME, 16);
+			tft.setTextSize(1);
+			tft.setTextFont(1);
+			tft.setTextColor(TFT_WHITE, TFT_RED);
+			tft.print(F("*REC*"));
+			break;
+
+		case REC_OFF:
+			tft.fillRect(TBARX_TIME, 16, 30, 8, TFT_BLACK);
+			break;
+
 		default:
 			break;
 	}
@@ -1906,9 +1927,22 @@ void openTime()
 
 void closeTime() {if (timer_state == TMR_RUN) timer_tmr.detach();}				// Wylacz odswierzanie ekranu stopera
 
-void openNavi() {clearWindow();}
+void openNavi()
+{
+	clearWindow();
 
-void openWptFile()
+	if (navi_state == NAVI_WPTS)													// Jezeli to tryb nawigacji do waypointa
+	{
+		tft.drawCircle(122, 70, 30, TFT_WHITE);										// Okrag kompasu/horyzontu
+		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_WHITE);	// Symbol w srodku horyzontu
+	}
+	else
+	{
+		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_BLACK); //Skasuj symbol w srodku horyzontu
+	}
+}
+
+void openWptFileList()
 {
 	clearWindow();
 	fs::Dir dir = SPIFFS.openDir("/");
@@ -1936,8 +1970,7 @@ void openWptFile()
 
 void listWptFiles(uint8_t file_pos)
 {
-	uint8_t files_set_no = file_pos / LIST_FILES_LEN;							// Nr "Kompletu" plikow. Na ekranie miesci sie 9 nazw
-	tft.fillRect(0, 40, 120, 88, TFT_BLACK);
+	uint8_t files_set_no = file_pos / LIST_FILES_LEN;							// Nr "Kompletu" plikow. Na ekranie miesci sie #def nazw
 
 	if (wptfile_lst.size() > LIST_FILES_LEN)									// Jezeli pliki nie mieszcza sie na ekranie
 	{
@@ -1958,11 +1991,11 @@ void listWptFiles(uint8_t file_pos)
 		{
 			if (file_num == file_pos)
 			{
-				tft.setTextColor(TFT_BLACK, TFT_YELLOW);						// Biezacy plik listuj na zielono
+				tft.setTextColor(TFT_BLACK, TFT_YELLOW);						// Biezacy plik listuj odmiennym kolorem
 				tft.setCursor(0, 40 + file * 8);
 				tft.print(F(">"));												// Wskaznik graficzny
 			}
-			else tft.setTextColor(TFT_GREEN, TFT_BLACK);						// Pozostale na bialo
+			else tft.setTextColor(TFT_GREEN, TFT_BLACK);						// Pozostale normalnie
 
 			if (itr->length() > 20)	tft.drawString(itr->substring(1, 20), 6, 40 + file * 8);
 			else tft.drawString(itr->substring(1), 6, 40 + file * 8);
@@ -1972,12 +2005,84 @@ void listWptFiles(uint8_t file_pos)
 	}
 }
 
-void openWpt()
+void openWptList()
+{
+	clearWindow();
+
+	if (wpt_lst.size())															// Jezeli sa jakies waypointy - listuj
+	{
+		tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+		tft.setCursor(6, 32);
+		tft.printf_P("Wybierz waypoint");
+		listWaypoints(cur_wpt);
+	}
+	else 																		// Jak nie ma waypointow
+	{
+		screen = SCR_FILES;														// Wroc do ekranu z plikami gpx
+		tftMsg(F("Brak waypointow"));
+		//delay(2000);															// NIE WIEM DLACZEGO OD RAZU RYSUJE KONTROLKI...
+	}
+}
+
+void listWaypoints(uint16_t wpt_pos)
+{
+	uint8_t wpts_set_no = wpt_pos / LIST_WPTS_LEN;								// Nr "Kompletu" waypointow. Na ekranie miesci sie #def nazw
+
+	if (wpt_lst.size() > LIST_WPTS_LEN)											// Jezeli waypointy nie mieszcza sie na ekranie
+	{
+		tft.setCursor(6, 40 + 10 * 8);											// Na dole listy
+		tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+		tft.print(F("...wiecej"));												// Zacheta
+	}
+ 
+	tft.setCursor(0, 40);														// Listuj zawsze od gory
+	SimpleList<wpt_t>::iterator itr = wpt_lst.begin() + (wpts_set_no * LIST_WPTS_LEN); // Odleglosc od poczatku listy w kompletach
+
+	for (uint8_t wpt = 0; wpt < LIST_WPTS_LEN; wpt++)							// Najwyzej #def waypointow na ekranie
+	{
+		uint8_t wpt_num = (wpts_set_no * LIST_WPTS_LEN) + wpt;					// Pozycja waypointa na liscie
+
+		if (wpt_num == wpt_lst.size()) break;									// Jezeli koniec listy waypointow, przerwij listowanie
+		else
+		{
+			if (wpt_num == wpt_pos)
+			{
+				tft.setTextColor(TFT_BLACK, TFT_YELLOW);						// Biezacy waypoint listuj odmiennym kolorem
+				tft.setCursor(0, 40 + wpt * 8);
+				tft.print(F(">"));												// Wskaznik graficzny
+			}
+			else tft.setTextColor(TFT_GREEN, TFT_BLACK);						// Pozostale normalnie
+
+			tft.drawString(itr->name, 6, 40 + wpt * 8);
+			itr++;
+		}
+	}
+}
+
+void openGpxInfo()
 {
 	clearWindow();
 	tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-	tft.setCursor(6, 32);
-	tft.printf_P("Wybierz waypoint");
+	tft.setCursor(4, 32);
+	tft.printf_P("Waypoints: %5d", file_wpts);
+	tft.setCursor(4, 40);
+	tft.printf_P("Tracks:    %5d", file_trks);
+	tft.setCursor(4, 48);
+	tft.printf_P("Routes:    %5d", file_rtes);
+	/*
+	debugI("Waypoints: %d Routes: %d Tracks: %d", file_wpts, file_rtes, file_trks);
+	SimpleList<wpt_t>::iterator itw = wpt_lst.begin();							// DEBUG
+
+	for (size_t i = 0; i < wpt_lst.size(); i++, itw++) debugI("WPT: NAME=%s LAT=%f LON=%.5f", itw->wpt_name, itw->wpt_lat, itw->wpt_lon);
+
+	SimpleList<rte_t>::iterator itr = rte_lst.begin();							// DEBUG
+
+	for (size_t i = 0; i < rte_lst.size(); i++, itr++) debugI("RTE: NAME=%s SIZE:%d", itr->rte_name, itr->rte_size);
+
+	SimpleList<trk_t>::iterator itt = trk_lst.begin();							// DEBUG
+
+	for (size_t i = 0; i < trk_lst.size(); i++, itt++) debugI("TRK: NAME=%s SIZE:%d", itt->trk_name, itt->trk_size);
+	*/
 }
 
 void openCombo()
@@ -2068,8 +2173,13 @@ void btnSaveTrk(bool on_off)
 		SPIFFS_file.close();
 		addWpt2Trk();															// Pierwszy waypoint od razu
 		navi_state = REC_TRK;													// Ustaw flage nagrywania sladu gpx
+		renderToolbar(REC_ON);													// Na toolbarze pokaz ze sie nagrywa
 	}
-	else navi_state = NO_TARGET;												// Skasuj flage nagrywania
+	else
+	{
+		navi_state = NO_TARGET;													// Skasuj flage nagrywania
+		renderToolbar(REC_OFF);													// Na toolbarze usun wskaznik nagrywania
+	}
 }
 
 void addWpt2Trk(void)
@@ -2123,6 +2233,8 @@ void addWpt2Wpt(bool reset_num)
 
 	if (reset_num) wpt_num = 0;													// Kasowanie numeru waypointa, jezeli nowy plik
 
+	renderToolbar(REC_ON);														// Pokaz wskaznik nagrywania
+	one_shoot.once_ms(500, std::bind(renderToolbar, REC_OFF));					// Po pol sekundzie go usun
 	SPIFFS_file = SPIFFS.open(gpx_file, "r+");									// Otworz plik do dopisywania
 	SPIFFS_file.seek(SPIFFS_file.size() - 8, SeekSet);							// Koncowka pliku - 8 bajtow
 	debugI("Waypoint %d", wpt_num);
@@ -2142,20 +2254,18 @@ void btnNav2Wpt(bool on_off)
 		return;
 	}
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
-	screen = SCR_FILES;
-	openScreen(screen, false);
-
-	/*
-	if (on_off)
+	if (navi_state != NAVI_WPTS)
 	{
-		tft.drawCircle(122, 70, 30, TFT_WHITE);										// Okrag kompasu/horyzontu
-		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_WHITE);	// Symbol w srodku horyzontu
+		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		screen = SCR_FILES;
+		openScreen(screen, false);
+		navi_state = NAVI_WPTS;													// Tryb nawigacji do waypointa
 	}
 	else
 	{
-		tft.fillTriangle(122, 70 - 4, 122 + 4, 70 + 4, 122 - 4, 70 + 4, TFT_BLACK); //Skasuj symbol w srodku horyzontu
-	} */
+		navi_state = NO_TARGET;
+		tft.fillRect(96, 32, 64, 96, TFT_BLACK);								// Usun horyzont
+	}
 }
 
 void btnPrevWptFile(bool on_off)
@@ -2164,7 +2274,7 @@ void btnPrevWptFile(bool on_off)
 	else cur_file = wptfile_lst.size() - 1;										// Ostatni plik
 
 	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
-	listWptFiles(cur_file);
+	openScreen(screen, false);													// Przerysuj ekran
 }
 
 void btnNextWptFile(bool on_off)
@@ -2173,25 +2283,55 @@ void btnNextWptFile(bool on_off)
 	else cur_file = 0;															// Pierwszy plik
 
 	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
-	listWptFiles(cur_file);
+	openScreen(screen, false);													// Przerysuj ekran
+}
+
+void btnInfoWptFile(bool on_off)
+{
+	parseGpxFile();
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	screen = SCR_GPXINFO;
+	openScreen(screen, false);													// Przejscie do ekranu z informacjami o zawartosci pliku gpx
+}
+
+void btnCancelGpxInfo(bool on_off)
+{
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
+	openScreen(screen, false);
 }
 
 void btnThisWptFile(bool on_off)
 {
-	// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
+	parseGpxFile();																// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	screen = SCR_WPTS;
+	openScreen(screen, false);													// Przejscie do ekranu listy waypointow
+}
+
+void btnCancelFile(bool on_off)
+{
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	navi_state = NO_TARGET;														// Wylaczenie trybu nawigacji do waypointa
+	screen = SCR_NAVI;															// Powrot do ekranu glownego nawigacji
+	openScreen(screen, true);
+}
+
+void parseGpxFile()
+{
 	wpt_lst.clear();															// Wyczysc listy waypointow
 	rte_lst.clear();															// Routow
 	trk_lst.clear();															// Trackow
 	SimpleList<String>::iterator itr_f = wptfile_lst.begin() + cur_file;
-	file_wpts = 0;															// Init licznikow
+	file_wpts = 0;																// Init licznikow
 	file_rtes = 0;
 	file_trks = 0;
 	debugI("Plik %s", itr_f->c_str());
 	TinyXML gpx_xml;
-	uint8_t buffer[150];													// Bufor dekodera XML
-	gpx_xml.init((uint8_t *)buffer, sizeof(buffer), &XML_callback);			// Inicjalizacja
-	gpx_xml.reset();														// wtf?
-	SPIFFS_file = SPIFFS.open(itr_f->c_str(), "r");							// Otworz gpx
+	uint8_t buffer[150];														// Bufor dekodera XML
+	gpx_xml.init((uint8_t *)buffer, sizeof(buffer), &XML_callback);				// Inicjalizacja
+	gpx_xml.reset();															// wtf?
+	SPIFFS_file = SPIFFS.open(itr_f->c_str(), "r");								// Otworz gpx
 
 	while (SPIFFS_file.available())
 	{
@@ -2200,32 +2340,7 @@ void btnThisWptFile(bool on_off)
 	}
 
 	SPIFFS_file.close();
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
-	// DEBUG
-	debugI("Waypoints: %d Routes: %d Tracks: %d", file_wpts, file_rtes, file_trks);
-	SimpleList<wpt_t>::iterator itw = wpt_lst.begin();							// DEBUG
-
-	for (size_t i = 0; i < wpt_lst.size(); i++, itw++) debugI("WPT: NAME=%s LAT=%f LON=%.5f", itw->wpt_name, itw->wpt_lat, itw->wpt_lon);
-
-	SimpleList<rte_t>::iterator itr = rte_lst.begin();							// DEBUG
-
-	for (size_t i = 0; i < rte_lst.size(); i++, itr++) debugI("RTE: NAME=%s SIZE:%d", itr->rte_name, itr->rte_size);
-
-	SimpleList<trk_t>::iterator itt = trk_lst.begin();							// DEBUG
-
-	for (size_t i = 0; i < trk_lst.size(); i++, itt++) debugI("TRK: NAME=%s SIZE:%d", itt->trk_name, itt->trk_size);
-
-	screen = SCR_WPTS;
-	openScreen(screen, false);													// Przejscie do ekranu listy waypointow
 }
-
-void btnCancelFile(bool on_off)
-{
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
-	screen = SCR_NAVI;															// Powrot do ekranu glownego nawigacji
-	openScreen(screen, true);
-}
-
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen)
 {
 	static wpt_t temp_wpt;
@@ -2252,21 +2367,21 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 
 	if ((statusflags & STATUS_ATTR_TEXT) && (!strcasecmp(tagName, "lat")) && waypoint_state == 1)
 	{
-		temp_wpt.wpt_lat = atof(data);
+		temp_wpt.lat = atof(data);
 		waypoint_state = 2;														// Jest LAT
 		return;
 	}
 
 	if ((statusflags & STATUS_ATTR_TEXT) && (!strcasecmp(tagName, "lon")) && waypoint_state == 2)
 	{
-		temp_wpt.wpt_lon = atof(data);
+		temp_wpt.lon = atof(data);
 		waypoint_state = 3;														// Jest LON
 		return;
 	}
 
 	if ((statusflags & STATUS_TAG_TEXT) && (!strcasecmp(tagName, "/gpx/wpt/name")) && waypoint_state == 3)
 	{
-		strncpy(temp_wpt.wpt_name, data, WPT_NAME_LEN - 1);						// Skopiuj nazwe waypointa
+		strncpy(temp_wpt.name, data, WPT_NAME_LEN - 1);						// Skopiuj nazwe waypointa
 		waypoint_state = 0;														// Jest nazwa
 		wpt_lst.push_back(temp_wpt);											// Dodaj waypoint do listy
 		file_wpts++;															// Zwieksz licznik waypointow
@@ -2276,7 +2391,7 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 	// RTE
 	if ((statusflags & STATUS_TAG_TEXT) && (!strcasecmp(tagName, "/gpx/rte/name")) && route_state == 0)
 	{
-		strncpy(temp_rte.rte_name, data, RTE_NAME_LEN - 1);						// Skopiuj nazwe routy
+		strncpy(temp_rte.name, data, RTE_NAME_LEN - 1);						// Skopiuj nazwe routy
 		route_state = 1;
 		file_rtes++;															// Zwieksz licznik routow
 		rte_size = 0;															// Wyzeruj licznik rozmiaru routy
@@ -2292,14 +2407,14 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 	if (statusflags & STATUS_END_TAG && (!strcasecmp(tagName, "/gpx/rte")) && route_state == 1)
 	{
 		route_state = 0;														// Koniec routy
-		temp_rte.rte_size = rte_size;											// Uaktualnij rozmiar routy
+		temp_rte.size = rte_size;											// Uaktualnij rozmiar routy
 		rte_lst.push_back(temp_rte);											// Dodaj route do listy
 	}
 
 	// TRK
 	if ((statusflags & STATUS_TAG_TEXT) && (!strcasecmp(tagName, "/gpx/trk/name")) && track_state == 0)
 	{
-		strncpy(temp_trk.trk_name, data, TRK_NAME_LEN - 1);						// Skopiuj nazwe tracka
+		strncpy(temp_trk.name, data, TRK_NAME_LEN - 1);						// Skopiuj nazwe tracka
 		track_state = 1;
 		file_trks++;															// Zwieksz licznik trackow
 		trk_size = 0;															// Wyzeruj licznik rozmiaru tracka
@@ -2315,23 +2430,65 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 	if (statusflags & STATUS_END_TAG && (!strcasecmp(tagName, "/gpx/trk")) && track_state == 1)
 	{
 		track_state = 0;														// Koniec tracka
-		temp_trk.trk_size = trk_size;											// Uaktualnij rozmiar tracka
+		temp_trk.size = trk_size;											// Uaktualnij rozmiar tracka
 		trk_lst.push_back(temp_trk);											// Dodaj track do listy
 	}
 }
 
+void btnPrevWptSet(bool on_off)
+{
+	if (cur_wpt > (LIST_WPTS_LEN - 1)) cur_wpt -= LIST_WPTS_LEN;				// Poprzedni komplet waypointow
+	
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	openScreen(screen, false);													// Przerysuj ekran
+}
+
+void btnNextWptSet(bool on_off)
+{
+	uint16_t wpts_set_no = cur_wpt / LIST_WPTS_LEN;								// Nr "Kompletu" waypointow
+	uint16_t last_set = (wpt_lst.size() - 1) / LIST_WPTS_LEN;					// Ostatni komplet
+	
+	if (wpts_set_no < last_set)
+	{
+		if ((cur_wpt + LIST_WPTS_LEN) < (uint16_t)(wpt_lst.size() - 1)) cur_wpt += LIST_WPTS_LEN;	// Nastepny komplet waypointow z listy
+		else cur_wpt = wpt_lst.size() - 1;										// Albo ostatni waypoint
+	}
+
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	openScreen(screen, false);													// Przerysuj ekran
+}
+
 void btnPrevWpt(bool on_off)
 {
+	if (cur_wpt > 0) cur_wpt--;													// Poprzedni waypoint z listy
+	else cur_wpt = wpt_lst.size() - 1;											// Ostatni waypoint
+
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	openScreen(screen, false);													// Przerysuj ekran
 }
 void btnNextWpt(bool on_off)
 {
+	if (cur_wpt < (wpt_lst.size() - 1)) cur_wpt++;								// Nastepny waypoint z listy
+	else cur_wpt = 0;															// Pierwszy waypoint
+
+	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	openScreen(screen, false);													// Przerysuj ekran
 }
+
 void btnThisWpt(bool on_off)
 {
+	SimpleList<wpt_t>::iterator itr = wpt_lst.begin() + cur_wpt;
+	dest_wpt = *itr;
+	debugI("Waypoint NAME: %s LAT:%.5f LON:%.5f", dest_wpt.name, dest_wpt.lat, dest_wpt.lon);
+	screen = SCR_NAVI;															// Powrot do ekranu nawigacji
+	ctrl_state[screen][1] |= 0x80;												// Ustaw MSB jako znacznik aktywowanej kontrolki
+	openScreen(screen, true);
 }
+
 void btnCancelWpt(bool on_off)
 {
 	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	cur_wpt = 0;																// Listuj zawsze od pierwszego w nowo otwartym pliku
 	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
 	openScreen(screen, false);
 }
@@ -2455,3 +2612,51 @@ point_t mtx_mul_vec(float mtx[], point_t xy)
 	point.y = xy.x * mtx[1] + xy.y * mtx[4] + mtx[7];
 	return point;
 }
+
+// Adafruit GPS
+/* Convert internal format (minutes * 10000) to
+ * DDD° MM' SS.SSS" DDD° MM' SS.SSS"
+ * DDD° MM.MMM' DDD° MM.MMM'
+ * DDD.DDDDD° DDD.DDDDD° */
+// dom:		52 5.577	21 0.420 -> 52.09295		21.00700
+// plot:	52 5.576	21 0.411 -> 52.09293		21.00685
+// szlaban:	52 5.705	21 0.410 -> 52.09508		21.00683
+// https://www.szukaj-trasy.com/wgs84.html
+// https://www.wspolrzedne-gps.pl/konwerter
+/* void gps_convert()
+{
+	//supported formats					syntax								examples
+	//degrees decimal minutes			DDD° MM.MMM' DDD° MM.MMM'			N 47° 38.938 W 122° 20.887				!!!!!!!! GPS !!!!!!!!
+	//decimal degrees					DDD.DDDDD° DDD.DDDDD°				N 47.64896° W -122.34812°
+	//degrees minutes seconds			DDD° MM' SS.SSS" DDD° MM' SS.SSS"	N 47° 38' 56.292" W 122° 20' 53.232"
+	//    decimal_degrees=degrees + minutes/60 + seconds/3600
+	//    degrees = decimal_degrees
+	//    minutes = 60 ∗ (decimal_degrees − degrees )
+	//    seconds = 3600 ∗ (decimal_degrees − degrees) − 60 ∗ minutes
+	//    52.09288 -> 52 05 34
+	uint32_t temp32;
+	//lat
+	location.lat_deg = labs(location.latitude) / 600000;						//52.09293 (52 stopnie)
+	location.lat_min = (labs(location.latitude) - (location.lat_deg * 600000)) / 10000;	//(31255758-31200000)/10000=5.5758 (5 minut)
+	temp32 = labs(location.latitude) - ((uint32_t) location.lat_deg * 600000) - ((uint32_t) location.lat_min * 10000);
+	location.lat_sec = 60 * temp32 / 10000;									//60*(55758-50000)/10000 = 34.548 (34 sekundy)
+	location.lat_sec_frac = 6 * (labs(location.latitude) - ((uint16_t) location.lat_deg * 600000) - ((uint16_t) location.lat_min * 10000)) % 1000; // 34548 % 1000=548
+	// lon
+	location.lon_deg = labs(location.longitude) / 600000;
+	location.lon_min = (labs(location.longitude) - (location.lon_deg * 600000)) / 10000;
+	temp32 = labs(location.longitude) - ((uint32_t) location.lon_deg * 600000) - ((uint32_t) location.lon_min * 10000);
+	location.lon_sec = 60 * temp32 / 10000;
+	location.lon_sec_frac = 6 * (labs(location.longitude) - ((uint16_t) location.lon_deg * 600000) - ((uint16_t)location.lon_min * 10000)) % 1000;
+
+	if (location.latitude > 0) location.ns = 'N';
+	else location.ns = 'S';
+
+	if (location.longitude > 0) location.we = 'W';
+	else location.we = 'E';
+
+	location.lat_dec_deg = labs(location.latitude) / 600000.0;
+	location.lon_dec_deg = labs(location.longitude) / 600000.0;
+	location.lat_dec_min = (labs(location.latitude) - (location.lat_deg * 600000)) / 10000.0;
+	location.lon_dec_min = (labs(location.longitude) - (location.lon_deg * 600000)) / 10000.0;
+}
+ */

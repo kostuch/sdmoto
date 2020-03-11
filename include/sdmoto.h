@@ -43,6 +43,7 @@
 #define TBARX_SD		96
 #define TBARX_TIME		128
 
+#define MAX_SCREENS		9														// Ilosc ekranow aplikacji
 #define LONG_PRESS		500														// Czas dlugiego wcisniecia [ms]
 #define AP_TIMEOUT		10														// Czas na polaczenie z Access Pointem
 #define NUM_KEYS		4														// Ilosc przyciskow na ekranie
@@ -56,11 +57,17 @@
 #define RTE_NAME_LEN	11														// Dlugosc nazwy routy
 #define TRK_NAME_LEN	11														// Dlugosc nazwy tracka
 #define LIST_FILES_LEN	10														// Ilosc plikow mieszczacych sie na listingu
+#define LIST_WPTS_LEN	10														// Ilosc waypointow mieszczaca sie na listingu
 
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
-enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX, GPS_DATETIME, MEM_FREE, MEM_AVG, MEM_FULL, SD_OK, SD_NOOK, SD_OFF};
-enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE, SCR_WELCOME, SCR_FILES, SCR_WPTS};	// Ekrany
+enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX,
+                     GPS_DATETIME, MEM_FREE, MEM_AVG, MEM_FULL,
+                     SD_OK, SD_NOOK, SD_OFF, REC_ON, REC_OFF
+                	};															// Elementy statusbara
+enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE,
+                     SCR_WELCOME, SCR_FILES, SCR_WPTS, SCR_GPXINFO
+              		};															// Ekrany
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
@@ -73,21 +80,21 @@ typedef struct
 
 typedef struct
 {
-	char		wpt_name[WPT_NAME_LEN];
-	float		wpt_lat;
-	float		wpt_lon;
+	char		name[WPT_NAME_LEN];
+	float		lat;
+	float		lon;
 } wpt_t;																		// Waypoint do nawigacji
 
 typedef struct
 {
-	char		rte_name[RTE_NAME_LEN];
-	uint16_t 	rte_size;
+	char		name[RTE_NAME_LEN];
+	uint16_t 	size;
 } rte_t;
 
 typedef struct
 {
-	char		trk_name[TRK_NAME_LEN];
-	uint16_t 	trk_size;
+	char		name[TRK_NAME_LEN];
+	uint16_t 	size;
 } trk_t;
 
 typedef struct
@@ -146,7 +153,7 @@ uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lok
 uint8_t speed;																	// Predkosc
 uint16_t volt;																	// Napiecie
 uint32_t tmr_start_time;														// Czas stoperowy
-uint8_t ctrl_state[8][2];														// 5 ekranow, pozycja ramki, nr aktywnej kontrolki
+uint8_t ctrl_state[MAX_SCREENS][2];												// #def ekranow, pozycja ramki, nr aktywnej kontrolki
 uint32_t tmr_ms;																// Liczba milisekund stopera
 uint32_t tmr_sec_num;															// Liczba sekund stopera
 uint8_t tmr_hrs, tmr_mins, tmr_secs, tmr_frac;									// Stoper: godziny, minuty, sekundy, ulamki
@@ -158,6 +165,7 @@ char gpx_file[24];																// Plik gpx z nagrywanym sladem
 bool trk_rec_flag;																// Flaga nagrywania pliku gpx
 wpt_t dest_wpt;																	// Waypoint do nawigacji
 uint8_t cur_file;																// Biezacy plik listingu
+uint16_t cur_wpt;																// Biezacy waypoint w pliku
 uint16_t file_wpts, file_rtes, file_trks;
 
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen);
@@ -215,22 +223,29 @@ void openTime(void);															// Otwarcie ekranu - stoper
 void openNavi(void);															// Otwarcie ekranu - nawigacja
 void openCombo(void);															// Otwarcie ekranu - combo
 void openGPS(void);																// Otwarcie ekranu - gps
-void openWptFile(void);															// Otwarcie ekranu - wybor pliku
-void openWpt(void);																// Otwarcie ekranu - wybor waypointa
+void openWptFileList(void);														// Otwarcie ekranu - wybor pliku
+void openWptList(void);															// Otwarcie ekranu - wybor waypointa
+void openGpxInfo(void);
 void closeTime(void);															// Zamkniecie ekranu - stoper
 void btnStopStart(bool on_off);													// Przycisk "start/stop" na metromierzu
 void btnSaveTrk(bool on_off);													// Przycisk "zapisuj track"
 void btnSaveWpt(bool on_off);													// Przycisk "zapis waypoint"
 void btnNav2Wpt(bool on_off);													// Przycisk "nawiguj do waypointa"
 void listWptFiles(uint8_t file_pos);											// Listowanie plikow .gpx
+void parseGpxFile(void);
+void btnCancelGpxInfo(bool on_off);
 void btnPrevWptFile(bool on_off);												// Przycisk "nastepny plik z listy"
 void btnNextWptFile(bool on_off);												// Przycisk "poprzedni plik z listy"
+void btnInfoWptFile(bool on_off);
 void btnThisWptFile(bool on_off);												// Przycisk "OK" wybor pliku gpx
 void btnCancelFile(bool on_off);												// Przycisk rezygnacji z wyboru pliku
-void btnPrevWpt(bool on_off);
-void btnNextWpt(bool on_off);
-void btnThisWpt(bool on_off);
-void btnCancelWpt(bool on_off);
+void listWaypoints(uint16_t);													// Listowanie waypointow
+void btnPrevWptSet(bool on_off);
+void btnNextWptSet(bool on_off);
+void btnPrevWpt(bool on_off);													// Przycisk "poprzedni waypoint"
+void btnNextWpt(bool on_off);													// Przycisk "nastepny waypoint"
+void btnThisWpt(bool on_off);													// Przycisk "OK" wybor waypointa
+void btnCancelWpt(bool on_off);													// Przycisk rezygnacji z wyboru waypointa
 void renderCtrl(btn_t *ctrl);													// Rysuj kontrolke na ekranie
 void meantimeSave(void);														// Zapis miedzyczas stopera
 void satCustomInit(void);														// Inicjalizacja statystyk satelitow
@@ -245,17 +260,21 @@ const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA 
 const btn_t ctrls_data[] PROGMEM =
 {
 	{0, 0, 45, 110, 56, 12, (char *) "Zatrzymaj", (char *) "Uruchom", btnStopStart},
-	{2, 0, 3, 35, 74, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
-	{2, 1, 3, 49, 74, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
-	{2, 2, 3, 63, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
-	{7, 0, 128, 36, 28, 12, (char *) "Gora", (char *) "Gora", btnPrevWptFile},
-	{7, 1, 128, 56, 28, 12, (char *) "Dol", (char *) "Dol", btnNextWptFile},
-	{7, 2, 128, 86, 28, 12, (char *) "OK", (char *) "", btnThisWptFile},
-	{7, 3, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelFile},
-	{8, 0, 128, 36, 28, 12, (char *) "^", (char *) "^", btnPrevWpt},
-	{8, 1, 128, 56, 28, 12, (char *) "v", (char *) "v", btnNextWpt},
-	{8, 2, 128, 86, 28, 12, (char *) "NAV", (char *) "", btnThisWpt},
-	{8, 3, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelWpt}
+	{2, 0, 3, 36, 74, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
+	{2, 1, 3, 50, 74, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
+	{2, 2, 3, 64, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
+	{7, 0, 128, 36, 28, 12, (char *) "^", (char *) "", btnPrevWptFile},
+	{7, 1, 128, 50, 28, 12, (char *) "v", (char *) "", btnNextWptFile},
+	{7, 2, 128, 64, 28, 12, (char *) "Info", (char *) "", btnInfoWptFile},
+	{7, 3, 128, 78, 28, 12, (char *) "OK", (char *) "", btnThisWptFile},
+	{7, 4, 128, 92, 28, 12, (char *) "<==", (char *) "", btnCancelFile},
+	{8, 0, 128, 36, 28, 12, (char *) "^", (char *) "", btnPrevWpt},
+	{8, 1, 128, 50, 28, 12, (char *) "<<", (char *) "", btnPrevWptSet},
+	{8, 2, 128, 64, 28, 12, (char *) ">>", (char *) "", btnNextWptSet},
+	{8, 3, 128, 78, 28, 12, (char *) "v", (char *) "", btnNextWpt},
+	{8, 4, 128, 92, 28, 12, (char *) "OK", (char *) "", btnThisWpt},
+	{8, 5, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelWpt},
+	{9, 0, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelGpxInfo}
 };
 
 const screen_t screen_data[] PROGMEM =
@@ -267,8 +286,9 @@ const screen_t screen_data[] PROGMEM =
 	{4, (char *) "GPS", openGPS, NULL},											// GPS
 	{5, (char *) "", NULL, NULL},												// Dummy (update)
 	{6, (char *) "", NULL, NULL},												// Dummy (welcome)
-	{7, (char *) "Pliki WPT", openWptFile, NULL},								// Pliki gpx
-	{8, (char *) "Waypointy", openWpt, NULL}									// Waypointy
+	{7, (char *) "Pliki WPT", openWptFileList, NULL},							// Pliki gpx
+	{8, (char *) "Waypointy", openWptList, NULL},								// Waypointy
+	{9, (char *) "GPX Info", openGpxInfo, NULL}									// Informacja o gpx
 };
 
 #endif /* SDMOTO_H_ */
