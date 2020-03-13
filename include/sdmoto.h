@@ -46,7 +46,7 @@
 #define MAX_SCREENS		9														// Ilosc ekranow aplikacji
 #define LONG_PRESS		500														// Czas dlugiego wcisniecia [ms]
 #define AP_TIMEOUT		10														// Czas na polaczenie z Access Pointem
-#define NUM_KEYS		4														// Ilosc przyciskow na ekranie
+#define SCR_SAVER_TIME	1														// Czas do wlaczenia screensavera
 #define SAVE_TIME		5														// Co 5 sekund zapis dystansow do pamieci
 #define MAX_SATS		20														// Maksymalna liczba widzianych satelitow
 #define MAX_DOP			10														// Najgorsza precyzja [m]
@@ -71,7 +71,7 @@ enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE,
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
-
+enum SDC_STATES		{SDC_OFF, SDC_NOOK, SDC_OK};								// Stany karty SD
 typedef struct
 {
 	int		x;
@@ -132,6 +132,7 @@ typedef struct
 	uint8_t		snr;
 } sat_t;																		// Parametry satelity
 
+bool ssaver_active;																// Flaga uaktywnienia screensavera
 bool connected;																	// Flaga WiFi
 bool internet;																	// Flaga dostepu do Internetu
 bool even_odd;																	// Parzysta/nieparzysta sekunda
@@ -145,6 +146,7 @@ enum SCREENS screen;															// Wyswietlany ekran
 enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
+enum SDC_STATES sdc_state;														// Stan karty SD
 volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow
 int fw_upd_progress;															// Postep upgrade
 cal_t calibration;																// Kalibracje
@@ -166,8 +168,10 @@ bool trk_rec_flag;																// Flaga nagrywania pliku gpx
 wpt_t dest_wpt;																	// Waypoint do nawigacji
 uint8_t cur_file;																// Biezacy plik listingu
 uint16_t cur_wpt;																// Biezacy waypoint w pliku
-uint16_t file_wpts, file_rtes, file_trks;
+uint16_t file_wpts, file_rtes, file_trks;										// Licznik waypointow, routes i tracks w pliku gpx
+uint16_t ssaver_time;															// Czas nieaktywnosci dla screensavera
 
+void renderScreenSaver(void);													// Wygaszacz ekranu
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen);
 void make_trt_mtx(point_t xy, float phi);										// Przygotowanie macierzy
 point_t mtx_mul_vec(float *mtx, point_t xy);									// Mnozenie macierzy
@@ -208,6 +212,7 @@ void handleFileUpload(void);													// www/list
 bool handleFileRead(String path);												// www/list
 String handleCalibration(void);													// Generowanie strony /cal
 String SPIFFS_list(void);														// Generowanie strony z listingiem plikow SPIFFS
+void trySDCard(void);															// Test karty SD
 void SD_list(void);
 String getContentType(String filename);											// Obsluga typow MIME
 String HTMLHeader(bool background);												// Generowanie naglowka HTML
@@ -225,23 +230,23 @@ void openCombo(void);															// Otwarcie ekranu - combo
 void openGPS(void);																// Otwarcie ekranu - gps
 void openWptFileList(void);														// Otwarcie ekranu - wybor pliku
 void openWptList(void);															// Otwarcie ekranu - wybor waypointa
-void openGpxInfo(void);
+void openGpxInfo(void);															// Otwarcie ekranu - informacje o zawartosci gpx
 void closeTime(void);															// Zamkniecie ekranu - stoper
 void btnStopStart(bool on_off);													// Przycisk "start/stop" na metromierzu
 void btnSaveTrk(bool on_off);													// Przycisk "zapisuj track"
 void btnSaveWpt(bool on_off);													// Przycisk "zapis waypoint"
 void btnNav2Wpt(bool on_off);													// Przycisk "nawiguj do waypointa"
 void listWptFiles(uint8_t file_pos);											// Listowanie plikow .gpx
-void parseGpxFile(void);
-void btnCancelGpxInfo(bool on_off);
+void parseGpxFile(void);														// Parsowanie pliku gpx
+void btnCancelGpxInfo(bool on_off);												// Wyjscie z ekranu z informacjami o gpx
 void btnPrevWptFile(bool on_off);												// Przycisk "nastepny plik z listy"
 void btnNextWptFile(bool on_off);												// Przycisk "poprzedni plik z listy"
-void btnInfoWptFile(bool on_off);
+void btnInfoWptFile(bool on_off);												// Przycisk "informacje o zawartosci gpx"
 void btnThisWptFile(bool on_off);												// Przycisk "OK" wybor pliku gpx
 void btnCancelFile(bool on_off);												// Przycisk rezygnacji z wyboru pliku
 void listWaypoints(uint16_t);													// Listowanie waypointow
-void btnPrevWptSet(bool on_off);
-void btnNextWptSet(bool on_off);
+void btnPrevWptSet(bool on_off);												// Poprzedni komplet waypointow do listowania
+void btnNextWptSet(bool on_off);												// Nastepny komplet waypointow do listowania
 void btnPrevWpt(bool on_off);													// Przycisk "poprzedni waypoint"
 void btnNextWpt(bool on_off);													// Przycisk "nastepny waypoint"
 void btnThisWpt(bool on_off);													// Przycisk "OK" wybor waypointa
@@ -260,9 +265,9 @@ const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA 
 const btn_t ctrls_data[] PROGMEM =
 {
 	{0, 0, 45, 110, 56, 12, (char *) "Zatrzymaj", (char *) "Uruchom", btnStopStart},
-	{2, 0, 3, 36, 74, 12, (char *) "Zapis TRK", (char *) "Zapis TRK*", btnSaveTrk},
-	{2, 1, 3, 50, 74, 12, (char *) "Zapis WPT", (char *) "Zapis WPT*", btnSaveWpt},
-	{2, 2, 3, 64, 74, 12, (char *) "Navi do WPT", (char *) "Navi do WPT*", btnNav2Wpt},
+	{2, 0, 3, 36, 70, 12, (char *) "Zapis TRK", (char *) "Zapis TRK", btnSaveTrk},
+	{2, 1, 3, 50, 70, 12, (char *) "Zapis WPT", (char *) "Zapis WPT", btnSaveWpt},
+	{2, 2, 3, 64, 70, 12, (char *) "Navi do WPT", (char *) "Navi do WPT", btnNav2Wpt},
 	{7, 0, 128, 36, 28, 12, (char *) "^", (char *) "", btnPrevWptFile},
 	{7, 1, 128, 50, 28, 12, (char *) "v", (char *) "", btnNextWptFile},
 	{7, 2, 128, 64, 28, 12, (char *) "Info", (char *) "", btnInfoWptFile},

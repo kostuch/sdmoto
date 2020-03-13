@@ -24,7 +24,7 @@
 
 Ticker				every_sec_tmr;												// Timer sekundowy
 Ticker 				timer_tmr;													// Timer stopera
-Ticker 				one_shoot;													// Timer jednorazowy
+Ticker 				one_shoot_tmr;												// Timer jednorazowy
 RemoteDebug			Debug;														// Zdalny debug
 PCF857x				pcf8575(I2C_EXP_A, &Wire);									// Ekspander PCF8574T
 SerialRAM			eeram;														// EERAM
@@ -108,11 +108,7 @@ void setup()
 	renderToolbar(WIFI_XOFF);													// Ikona WiFi
 	renderToolbar(GPS_NOFIX);													// Ikona GPS
 	SPIFFS_list();																// Ikona pamieci wg zajetosci
-
-	if (!sd.begin(SD_CONFIG)) renderToolbar(SD_OFF);							// Brak karty SD
-	else if (!dir.open("/")) renderToolbar(SD_NOOK);							// Karta bez filesystemu
-	else renderToolbar(SD_OK);													// Karta OK
-
+	trySDCard();																// Test karty SD
 	renderToolbar(GPS_DATETIME);												// Czas
 	pulses_cnt1 = eeram_read32(DIST1);											// Odczyt dystansu odcinka
 	pulses_cnt2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
@@ -136,6 +132,7 @@ void loop()
 		if (screen == SCR_DIST || screen == SCR_NAVI || screen == SCR_COMBO) renderScreen(screen);
 
 		imp_signal = false;														// Przerwanie obsluzone
+		ssaver_time = 0;														// Zerowanie licznika timeoutu
 		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
 
@@ -204,33 +201,44 @@ void everySecTask()
 	static uint8_t save_time;
 	static uint8_t rec_wpt;
 	static int16_t old_course;
-	even_odd ^= 1;																// Co sekunde zmien flage
-	computeSpeed();																// Aktualizacja predkosci
-	computeVolt();																// Aktualizacja napiecia
 
-	if (save_time++ > SAVE_TIME)												// Co pewien czas
+	if (ssaver_time / 60 > SCR_SAVER_TIME)										// Po #def minutach aktywuj screensaver
 	{
-		if (conf.getInt("imp_src") == 0)
-		{
-			eeram_save32(DIST1, distance1);										// Zapamietanie dystansow
-			eeram_save32(DIST2, distance2);
-		}
-		else
-		{
-			eeram_save32(DIST1, pulses_cnt1);									// Zapamietanie impulsow
-			eeram_save32(DIST2, pulses_cnt2);
-		}
-
-		save_time = 0;
+		ssaver_active = true;
+		renderScreenSaver();
 	}
+	else ssaver_time++;															// Licznik czasu bezczynnosci
 
-	renderToolbar(GPS_DATETIME);												// Nowy czas z GPS
+	if (!ssaver_active)															// Jezeli nieaktywny screensaver
+	{
+		even_odd ^= 1;															// Co sekunde zmien flage
+		computeSpeed();															// Aktualizacja predkosci
+		computeVolt();															// Aktualizacja napiecia
 
-	if (screen == SCR_COMBO) renderScreen(SCR_COMBO);
+		if (save_time++ > SAVE_TIME)											// Co pewien czas
+		{
+			if (conf.getInt("imp_src") == 0)
+			{
+				eeram_save32(DIST1, distance1);									// Zapamietanie dystansow
+				eeram_save32(DIST2, distance2);
+			}
+			else
+			{
+				eeram_save32(DIST1, pulses_cnt1);								// Zapamietanie impulsow
+				eeram_save32(DIST2, pulses_cnt2);
+			}
 
-	if (screen == SCR_NAVI) renderScreen(SCR_NAVI);
+			save_time = 0;
+		}
 
-	if (screen == SCR_GPS) renderScreen(SCR_GPS);
+		renderToolbar(GPS_DATETIME);											// Nowy czas z GPS
+
+		if (screen == SCR_COMBO) renderScreen(SCR_COMBO);
+
+		if (screen == SCR_NAVI) renderScreen(SCR_NAVI);
+
+		if (screen == SCR_GPS) renderScreen(SCR_GPS);
+	}
 
 	if (gps.location.isValid() && (gps.location.age() < 2000))					// Jezeli swieza lokalizacja
 	{
@@ -250,6 +258,8 @@ void everySecTask()
 		old_lat = cur_lat;														// Zapamietaj lokalizacje jako stara
 		old_lon = cur_lon;
 		course = (int16_t) gps.course.deg();									// Nowy kurs
+
+		if (dist) ssaver_time = 0;												// Wyzeruj czas nieaktywnosci, jezeli zmiana
 
 		if (navi_state == REC_TRK)												// Jezeli nagrywanie gpx
 		{
@@ -273,6 +283,26 @@ void everySecTask()
 			renderToolbar(GPS_NOFIX);											// Przerysuj ikone
 			fix = false;														// Nie ma FIXa
 		}
+	}
+
+	if (ssaver_active && !(ssaver_time > SCR_SAVER_TIME))						// Jezeli aktywny screensaver i wyzerowane sekundy
+	{
+		ssaver_active = false;													// Wyzeruj flage
+		tft.fillScreen(TFT_BLACK);
+
+		if (fix) renderToolbar(GPS_FIX);										// Ikona GPS
+		else renderToolbar(GPS_NOFIX);
+
+		if (connected && internet) renderToolbar(WIFI_XSTA);					// Ikona wifi
+		else renderToolbar(WIFI_XAP);
+
+		SPIFFS_list();															// Ikona pamieci
+		
+		if (sdc_state == SDC_OFF) renderToolbar(SD_OFF);
+		else if (sdc_state == SDC_NOOK) renderToolbar(SD_NOOK);
+		else renderToolbar(SD_OK);												// Ikona karty SD
+		
+		openScreen(screen, true);												// Ostatni ekran
 	}
 }
 
@@ -305,6 +335,25 @@ ICACHE_RAM_ATTR void imp_irq(void)
 ICACHE_RAM_ATTR void i2c_irq(void)
 {
 	pcf_signal = true;															// Flaga zdarzenia na ekspanderze
+}
+
+void trySDCard()
+{
+	if (!sd.begin(SD_CONFIG))
+	{
+		renderToolbar(SD_OFF);													// Brak karty SD
+		sdc_state = SDC_OFF;
+	}
+	else if (!dir.open("/"))
+	{
+		renderToolbar(SD_NOOK);													// Karta bez filesystemu
+		sdc_state = SDC_NOOK;
+	}
+	else
+	{
+		renderToolbar(SD_OK);													// Karta OK
+		sdc_state = SDC_OK;
+	}
 }
 
 uint16_t eeram_read16(int16_t addr)
@@ -650,16 +699,12 @@ void initWiFiStaAp()
 			IPAddress gateway(10, 0, 0, 1);
 			IPAddress subnet(255, 0, 0, 0);
 			WiFi.softAPConfig(local_IP, gateway, subnet);
-			//WiFi.mode(WIFI_AP);//192.168.4.1
 			WiFi.softAP(conf.getApName(), conf.getValue("dev_pwd"));			// Ustaw tryb Access Pointa
 			connected = true;													// Ustaw flage
 			internet = false;
 			renderToolbar(WIFI_XAP);											// Aktualizuj ikone na toolbarze
 			startWebServer();													// Wystartuj Serwer www
 			debugInit();
-			//Serial.println(F("Serwer www RUN at AP IP:"));
-			//Serial.println(conf.getApName());
-			//Serial.println(WiFi.softAPIP());
 		}
 	}
 	else
@@ -670,10 +715,6 @@ void initWiFiStaAp()
 		WiFi.hostname(conf.getApName());											// Nazwa hosta (kosmetyka)
 		startWebServer();															// Wystartuj Serwer www
 		debugInit();
-		//Serial.print(F("Serwer www RUN at Sta IP:"));
-		tft.setCursor(TBARX_WIFI + 16, 0);
-		tft.setTextColor(TFT_WHITE, TFT_BLACK);
-		tft.print(WiFi.localIP().toString().substring(WiFi.localIP().toString().lastIndexOf('.') + 1, WiFi.localIP().toString().length()));
 	}
 }
 
@@ -1116,6 +1157,7 @@ void btnCheck()
 			break;
 	}
 
+	ssaver_time = 0;															// Zerowanie czasu nieaktywnosci
 	pcf_signal = false;															// Przycisk obsluzony
 }
 
@@ -1763,6 +1805,9 @@ void renderCtrl(btn_t *ctrl)
 
 void renderToolbar(enum TOOLBAR_ITEMS item)
 {
+	char str[16];
+	char *res;
+
 	switch (item)
 	{
 		case WIFI_XOFF:
@@ -1771,10 +1816,32 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 
 		case WIFI_XAP:
 			tft.drawBitmap(TBARX_WIFI, 0, ap_sym, 32, 32, TFT_GREEN, TFT_BLACK);
+			tft.setTextColor(TFT_RED);
+			WiFi.softAPIP().toString().toCharArray(str, sizeof(str));
+			res = strtok(str, ".");
+
+			for (size_t i = 0; i < 4; i++)										// Cztery oktety adresu IP
+			{
+				tft.setCursor(TBARX_WIFI, i * 8);
+				tft.print(res);
+				res = strtok(NULL, ".");
+			}
+
 			break;
 
 		case WIFI_XSTA:
 			tft.drawBitmap(TBARX_WIFI, 0, wifi_sym, 32, 32, TFT_GREEN, TFT_BLACK);
+			tft.setTextColor(TFT_RED);
+			WiFi.localIP().toString().toCharArray(str, sizeof(str));
+			res = strtok(str, ".");
+
+			for (size_t i = 0; i < 4; i++)										// Cztery oktety adresu IP
+			{
+				tft.setCursor(TBARX_WIFI, i * 8);
+				tft.print(res);
+				res = strtok(NULL, ".");
+			}
+
 			break;
 
 		case GPS_DATETIME:
@@ -1909,7 +1976,7 @@ void tftMsg(String message)
 	tft.drawRect(10, 40, 140, 40, TFT_RED);
 	tft.drawRect(11, 41, 138, 38, TFT_RED);
 	tft.drawCentreString(message, 80, 60, 1);
-	one_shoot.once_ms(1500, std::bind(openScreen, screen, true));				// Odswierz po chwili ekran
+	one_shoot_tmr.once_ms(1500, std::bind(openScreen, screen, true));			// Odswiez po chwili ekran
 }
 
 void openDist() {clearWindow();}
@@ -2034,7 +2101,7 @@ void listWaypoints(uint16_t wpt_pos)
 		tft.setTextColor(TFT_YELLOW, TFT_BLACK);
 		tft.print(F("...wiecej"));												// Zacheta
 	}
- 
+
 	tft.setCursor(0, 40);														// Listuj zawsze od gory
 	SimpleList<wpt_t>::iterator itr = wpt_lst.begin() + (wpts_set_no * LIST_WPTS_LEN); // Odleglosc od poczatku listy w kompletach
 
@@ -2234,7 +2301,7 @@ void addWpt2Wpt(bool reset_num)
 	if (reset_num) wpt_num = 0;													// Kasowanie numeru waypointa, jezeli nowy plik
 
 	renderToolbar(REC_ON);														// Pokaz wskaznik nagrywania
-	one_shoot.once_ms(500, std::bind(renderToolbar, REC_OFF));					// Po pol sekundzie go usun
+	one_shoot_tmr.once_ms(500, std::bind(renderToolbar, REC_OFF));				// Po pol sekundzie go usun
 	SPIFFS_file = SPIFFS.open(gpx_file, "r+");									// Otworz plik do dopisywania
 	SPIFFS_file.seek(SPIFFS_file.size() - 8, SeekSet);							// Koncowka pliku - 8 bajtow
 	debugI("Waypoint %d", wpt_num);
@@ -2438,7 +2505,7 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 void btnPrevWptSet(bool on_off)
 {
 	if (cur_wpt > (LIST_WPTS_LEN - 1)) cur_wpt -= LIST_WPTS_LEN;				// Poprzedni komplet waypointow
-	
+
 	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
@@ -2447,7 +2514,7 @@ void btnNextWptSet(bool on_off)
 {
 	uint16_t wpts_set_no = cur_wpt / LIST_WPTS_LEN;								// Nr "Kompletu" waypointow
 	uint16_t last_set = (wpt_lst.size() - 1) / LIST_WPTS_LEN;					// Ostatni komplet
-	
+
 	if (wpts_set_no < last_set)
 	{
 		if ((cur_wpt + LIST_WPTS_LEN) < (uint16_t)(wpt_lst.size() - 1)) cur_wpt += LIST_WPTS_LEN;	// Nastepny komplet waypointow z listy
@@ -2577,6 +2644,11 @@ void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r)
 	old_r = r;
 }
 
+void renderScreenSaver()
+{
+	tft.setTextColor(random(65535), TFT_BLACK);
+	tft.drawString("SkeletonDevices", random(100), random(120), random(6));
+}
 ////////////////////////////////////////////////////////////////////////////////
 // Macierze https://eduinf.waw.pl/inf/utils/002_roz/2008_21.php
 ////////////////////////////////////////////////////////////////////////////////
