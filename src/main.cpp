@@ -15,6 +15,7 @@
 #include <TJpg_Decoder.h>														// Dekoder jpg
 #include <TFT_eSPI.h>															// TFT (ST7735)
 #include <RemoteDebug.h>														// https://github.com/JoaoLopesF/RemoteDebug
+#include <ArduinoOTA.h>
 #include <SerialRAM.h>															// EERAM
 #include <TinyXML.h>															// Parser plikow gpx
 #include "TinyGPS++.h"															// GPS
@@ -117,6 +118,37 @@ void setup()
 	openScreen(screen, true);													// Otworz go
 	every_sec_tmr.attach_ms(1000, everySecTask);								// Zadania do wykonania co sekunde
 	satCustomInit();															// Inicjalizacja statystyk satelitow
+	setupOTA();																	// Ustawienie lokalnego OTA
+}
+
+void setupOTA()
+{
+	ArduinoOTA.onStart([]()
+	{
+		every_sec_tmr.detach();
+		tft.setTextColor(TFT_RED, TFT_BLACK);
+		tft.fillScreen(TFT_BLACK);
+		tft.drawString(F("Start update"), 0, 0, 2);
+	});
+	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+	{
+		tft.drawNumber(progress / (total / 100), 0, 16, 2);
+	});
+	ArduinoOTA.onEnd([]()
+	{
+		tft.drawString(F("End update"), 0, 32, 2);
+	});
+	ArduinoOTA.onError([](ota_error_t error)
+	{
+		tft.drawString(F("Error!!!"), 0, 64, 2);
+
+		if (error == OTA_AUTH_ERROR) tft.drawString(F("Auth Failed"), 0, 80, 2);
+		else if (error == OTA_BEGIN_ERROR) tft.drawString(F("Begin Failed"), 0, 80, 2);
+		else if (error == OTA_CONNECT_ERROR) tft.drawString(F("Connect Failed"), 0, 80, 2);
+		else if (error == OTA_RECEIVE_ERROR) tft.drawString(F("Receive Failed"), 0, 80, 2);
+		else if (error == OTA_END_ERROR) tft.drawString(F("End Failed"), 0, 80, 2);
+	});
+	ArduinoOTA.begin();
 }
 
 void loop()
@@ -150,6 +182,8 @@ void loop()
 	while (Serial.available()) gps.encode(Serial.read());						// Obsluga transmisji NMEA z GPS
 
 	if (totalGPGSVMessages.isUpdated()) satUpdateStats();						// Update statystyk satelitow po otrzymaniu informacji o 4 satelitach
+
+	ArduinoOTA.handle();
 
 	if (connected) Debug.handle();												// Obsluga Remote Debug
 }
@@ -297,11 +331,11 @@ void everySecTask()
 		else renderToolbar(WIFI_XAP);
 
 		SPIFFS_list();															// Ikona pamieci
-		
+
 		if (sdc_state == SDC_OFF) renderToolbar(SD_OFF);
 		else if (sdc_state == SDC_NOOK) renderToolbar(SD_NOOK);
 		else renderToolbar(SD_OK);												// Ikona karty SD
-		
+
 		openScreen(screen, true);												// Ostatni ekran
 	}
 }
@@ -1739,11 +1773,12 @@ void renderScreen(enum SCREENS scr)
 			if (gps.location.isUpdated())
 			{
 				tft.setCursor(4 + 7 * 6, 84);									// Tylko wartosc, wiec przesuniety kursor
-				tft.printf_P("%.5f%c", gps.location.lat(), 247);
-				//tft.setCursor(4 + 6 * 6, 92);									// Tylko wartosc, wiec przesuniety kursor
-				//tft.printf_P("%09.5f%c", gps.location.lng(), 247);
+				tft.printf_P("%8.5f%c", gps.location.lat(), 247);
 				tft.setCursor(4 + 7 * 6, 92);									// Tylko wartosc, wiec przesuniety kursor
-				tft.printf_P("%.5f%c", gps.location.lng(), 247);
+				tft.printf_P("%8.5f%c", gps.location.lng(), 247);
+				//debugI("LAT: %8.5f %d %09lu", gps.location.lat(), gps.location.rawLat().deg, (long unsigned)gps.location.rawLat().billionths);
+				//debugI("LON: %8.5f %d %09lu", gps.location.lng(), gps.location.rawLng().deg, (long unsigned)gps.location.rawLng().billionths);
+				debugI("LAT: %8.5f %s", gps.location.lat(), gpsFormatConvert(gps.location.rawLat().deg, gps.location.rawLat().billionths, GPS_SD).c_str());
 			}
 
 			if (gps.altitude.isUpdated())
@@ -2181,9 +2216,9 @@ void openGPS()
 	tft.drawCircle(127, 64, 30, TFT_WHITE);										// Okrag kompasu
 	tft.setTextColor(TFT_WHITE, TFT_BLACK);
 	tft.setCursor(4, 84);
-	tft.printf_P("Lat: N %.5f%c", gps.location.lat(), 247);
+	tft.printf_P("Lat: N %8.5f%c", gps.location.lat(), 247);
 	tft.setCursor(4, 92);
-	tft.printf_P("Lon: E %.5f%c", gps.location.lng(), 247);
+	tft.printf_P("Lon: E %8.5f%c", gps.location.lng(), 247);
 	tft.setCursor(4, 100);
 	tft.printf_P("Alt: %4d m", (int) gps.altitude.meters());
 	tft.setCursor(4, 108);
@@ -2732,3 +2767,28 @@ point_t mtx_mul_vec(float mtx[], point_t xy)
 	location.lon_dec_min = (labs(location.longitude) - (location.lon_deg * 600000)) / 10000.0;
 }
  */
+
+String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt)
+{
+	String result;
+	char out[16];
+
+	switch (fmt)
+	{
+		case GPS_SD:
+			//result = String(deg) + '.' + String(frac / 10000) + char(247);
+			sprintf(out, "%d.%05lu%c", deg, (long unsigned) frac / 10000, 247);
+			result = String(out);
+			break;
+
+		case GPS_SMS:
+			/* code */
+			break;
+
+		case GPS_SMD:
+			/* code */
+			break;
+	}
+
+	return result;
+}

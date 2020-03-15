@@ -72,6 +72,7 @@ enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigac
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
 enum TIMER_STATES	{TMR_STOP, TMR_RUN};										// Stany stopera
 enum SDC_STATES		{SDC_OFF, SDC_NOOK, SDC_OK};								// Stany karty SD
+enum GPS_FORMATS	{GPS_SD, GPS_SMS, GPS_SMD};									// Stopnie dziesietne, stopnie-minuty-sekundy, stopnie-minuty dziesietne
 typedef struct
 {
 	int		x;
@@ -171,12 +172,13 @@ uint16_t cur_wpt;																// Biezacy waypoint w pliku
 uint16_t file_wpts, file_rtes, file_trks;										// Licznik waypointow, routes i tracks w pliku gpx
 uint16_t ssaver_time;															// Czas nieaktywnosci dla screensavera
 
+void setupOTA(void);															// Funkcje lokalnego OTA
 void renderScreenSaver(void);													// Wygaszacz ekranu
 void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char *data, uint16_t dataLen);
 void make_trt_mtx(point_t xy, float phi);										// Przygotowanie macierzy
 point_t mtx_mul_vec(float *mtx, point_t xy);									// Mnozenie macierzy
 void tftMsg(String message);													// Komunikat (o bledzie) na ekranie
-bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);
+bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bmp);	// Pokazanie jpg na ekranie
 void everySecTask(void);														// Funkcja wykonywana co sekunde
 void mux_switch(enum MUX_STATES state);											// Przelaczenie multipleksera sygnalow
 void i2c_irq(void);																// Przerwanie od ekspandera
@@ -259,6 +261,7 @@ void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r);				// Rysowani
 void renderWpt(uint16_t course, point_t xy, uint8_t shift, uint16_t color);		// Rysowanie symbolu waypointa na horyzoncie
 void addWpt2Trk(void);															// Zapis WPT do trasy .gpx
 void addWpt2Wpt(bool reset_num);												// Zapis WPT do zbioru waypointow .gpx
+String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt);
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 
