@@ -104,7 +104,7 @@ void setup()
 	calibration.bright_cal = eeram_read16(BRIGHT_CAL);							// Odczyt kalibracji jasnosci
 	analogWrite(BL_PIN, calibration.bright_cal);								// TFT podswietlenie wg kalibracji
 	renderScreen(SCR_WELCOME);													// Pokaz wizytowke
-	delay(4000);																// Chwila...
+	delay(3000);																// Chwila...
 	tft.fillScreen(TFT_BLACK);													// CLS
 	renderToolbar(WIFI_XOFF);													// Ikona WiFi
 	renderToolbar(GPS_NOFIX);													// Ikona GPS
@@ -1776,9 +1776,8 @@ void renderScreen(enum SCREENS scr)
 				tft.printf_P("%8.5f%c", gps.location.lat(), 247);
 				tft.setCursor(4 + 7 * 6, 92);									// Tylko wartosc, wiec przesuniety kursor
 				tft.printf_P("%8.5f%c", gps.location.lng(), 247);
-				//debugI("LAT: %8.5f %d %09lu", gps.location.lat(), gps.location.rawLat().deg, (long unsigned)gps.location.rawLat().billionths);
-				//debugI("LON: %8.5f %d %09lu", gps.location.lng(), gps.location.rawLng().deg, (long unsigned)gps.location.rawLng().billionths);
-				debugI("LAT: %8.5f %s", gps.location.lat(), gpsFormatConvert(gps.location.rawLat().deg, gps.location.rawLat().billionths, GPS_SD).c_str());
+				//debugI("LAT: %8.5f %09lu %s %s %s", gps.location.lat(), (long unsigned)gps.location.rawLat().billionths, gpsFormatConvert(gps.location.rawLat().deg, gps.location.rawLat().billionths, GPS_SD).c_str(), gpsFormatConvert(gps.location.rawLat().deg, gps.location.rawLat().billionths, GPS_SMS).c_str(), gpsFormatConvert(gps.location.rawLat().deg, gps.location.rawLat().billionths, GPS_SMD).c_str());
+				//debugI("LON: %8.5f %09lu %s %s %s", gps.location.lng(), (long unsigned)gps.location.rawLng().billionths, gpsFormatConvert(gps.location.rawLng().deg, gps.location.rawLng().billionths, GPS_SD).c_str(), gpsFormatConvert(gps.location.rawLng().deg, gps.location.rawLng().billionths, GPS_SMS).c_str(), gpsFormatConvert(gps.location.rawLng().deg, gps.location.rawLng().billionths, GPS_SMD).c_str());
 			}
 
 			if (gps.altitude.isUpdated())
@@ -2720,75 +2719,35 @@ point_t mtx_mul_vec(float mtx[], point_t xy)
 	return point;
 }
 
-// Adafruit GPS
-/* Convert internal format (minutes * 10000) to
- * DDD° MM' SS.SSS" DDD° MM' SS.SSS"
- * DDD° MM.MMM' DDD° MM.MMM'
- * DDD.DDDDD° DDD.DDDDD° */
-// dom:		52 5.577	21 0.420 -> 52.09295		21.00700
-// plot:	52 5.576	21 0.411 -> 52.09293		21.00685
-// szlaban:	52 5.705	21 0.410 -> 52.09508		21.00683
-// https://www.szukaj-trasy.com/wgs84.html
-// https://www.wspolrzedne-gps.pl/konwerter
-/* void gps_convert()
-{
-	//supported formats					syntax								examples
-	//degrees decimal minutes			DDD° MM.MMM' DDD° MM.MMM'			N 47° 38.938 W 122° 20.887				!!!!!!!! GPS !!!!!!!!
-	//decimal degrees					DDD.DDDDD° DDD.DDDDD°				N 47.64896° W -122.34812°
-	//degrees minutes seconds			DDD° MM' SS.SSS" DDD° MM' SS.SSS"	N 47° 38' 56.292" W 122° 20' 53.232"
-	//    decimal_degrees=degrees + minutes/60 + seconds/3600
-	//    degrees = decimal_degrees
-	//    minutes = 60 ∗ (decimal_degrees − degrees )
-	//    seconds = 3600 ∗ (decimal_degrees − degrees) − 60 ∗ minutes
-	//    52.09288 -> 52 05 34
-	uint32_t temp32;
-	//lat
-	location.lat_deg = labs(location.latitude) / 600000;						//52.09293 (52 stopnie)
-	location.lat_min = (labs(location.latitude) - (location.lat_deg * 600000)) / 10000;	//(31255758-31200000)/10000=5.5758 (5 minut)
-	temp32 = labs(location.latitude) - ((uint32_t) location.lat_deg * 600000) - ((uint32_t) location.lat_min * 10000);
-	location.lat_sec = 60 * temp32 / 10000;									//60*(55758-50000)/10000 = 34.548 (34 sekundy)
-	location.lat_sec_frac = 6 * (labs(location.latitude) - ((uint16_t) location.lat_deg * 600000) - ((uint16_t) location.lat_min * 10000)) % 1000; // 34548 % 1000=548
-	// lon
-	location.lon_deg = labs(location.longitude) / 600000;
-	location.lon_min = (labs(location.longitude) - (location.lon_deg * 600000)) / 10000;
-	temp32 = labs(location.longitude) - ((uint32_t) location.lon_deg * 600000) - ((uint32_t) location.lon_min * 10000);
-	location.lon_sec = 60 * temp32 / 10000;
-	location.lon_sec_frac = 6 * (labs(location.longitude) - ((uint16_t) location.lon_deg * 600000) - ((uint16_t)location.lon_min * 10000)) % 1000;
-
-	if (location.latitude > 0) location.ns = 'N';
-	else location.ns = 'S';
-
-	if (location.longitude > 0) location.we = 'W';
-	else location.we = 'E';
-
-	location.lat_dec_deg = labs(location.latitude) / 600000.0;
-	location.lon_dec_deg = labs(location.longitude) / 600000.0;
-	location.lat_dec_min = (labs(location.latitude) - (location.lat_deg * 600000)) / 10000.0;
-	location.lon_dec_min = (labs(location.longitude) - (location.lon_deg * 600000)) / 10000.0;
-}
- */
-
 String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt)
 {
 	String result;
 	char out[16];
-
+	long unsigned f103 = frac / 10000;
 	switch (fmt)
 	{
 		case GPS_SD:
-			//result = String(deg) + '.' + String(frac / 10000) + char(247);
-			sprintf(out, "%d.%05lu%c", deg, (long unsigned) frac / 10000, 247);
-			result = String(out);
+			sprintf(out, "%d.%05lu%c", deg, f103, 247);							// Stopnie i ulamki stopnia
 			break;
 
 		case GPS_SMS:
-			/* code */
+			//sprintf(out, "%d%c%lu'%lu.%lu\"", deg, 42 /*247*/, 
+			//(f103 * 60) / 100000,												// Minuty
+			//((f103 * 3600 / 100) - ((f103 * 60) / 100000) * 60 * 1000) / 1000,	// Sekundy
+			//((f103 * 3600 / 100) - ((f103 * 60) / 100000) * 60 * 1000) % 1000);	// Ulamki sekund
+			sprintf(out, "%d%c%02lu'%02lu.%03lu\"", deg, 42 /*247*/, 
+			(f103 * 6) / 10000,													// Minuty
+			((f103 * 36) - ((f103 * 6) / 10000) * 60000) / 1000,				// Sekundy
+			((f103 * 36) - ((f103 * 6) / 10000) * 60000) % 1000);				// Ulamki sekund
 			break;
 
 		case GPS_SMD:
-			/* code */
+			sprintf(out, "%d%c%02lu.%04lu'", deg, 42 /*247*/,
+			(f103 * 6) / 10000,													// Minuty
+			(f103 * 6) - ((f103 * 6) / 10000) * 10000);							// Ulamki minut
 			break;
 	}
 
+	result = String(out);
 	return result;
 }
