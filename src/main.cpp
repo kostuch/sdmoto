@@ -86,7 +86,7 @@ void setup()
 {
 	Serial.begin(9600);															// Init UART (predkosc jak dla GPS)
 	SPIFFS.begin();																// Init SPIFFS
-	Wire.setClock(400000);														// Predkosc I2C (Max!!!)
+	Wire.setClock(500000);														// Predkosc I2C (Max!!!)
 	Wire.begin(SDA_PAD, SCL_PAD);												// Init I2C
 	pcf8575.begin();															// Init PCF8574
 	setupPins();																// Ustawienie pinow GPIO
@@ -1268,7 +1268,7 @@ void keyShortPress(enum BUTTONS button)
 				if (!(ctrl_state[screen][1] & 0x80))							// Jezeli (zadna) kontrolka nie jest aktywna (nieustawione MSB)
 				{
 					ctrl_state[screen][1] = ctrl_state[screen][0];				// Zapisz biezaca kontrolke jako aktywna
-					ctrl_state[screen][1] |= 0x80;								// Ustaw MSB jako znacznik aktywowanej kontrolki
+					CTRL_ON;													// Ustaw MSB jako znacznik aktywowanej kontrolki
 					renderCtrl(idx + ctrl_state[screen][0]);
 					btnExe = (idx + ctrl_state[screen][0])->key_exec;			// exe w zaleznosci od kontrolki
 
@@ -1279,7 +1279,7 @@ void keyShortPress(enum BUTTONS button)
 					// Jezeli ustawiony MSB i nr biezacej kontrolki taki jak nr aktywnej kontrolki
 					if ((ctrl_state[screen][1] & 0x80) && ((ctrl_state[screen][1] & 0x7F) == ctrl_state[screen][0]))
 					{
-						ctrl_state[screen][1] &= 0x7F;							// Skasuj MSB jako znacznik deaktywowanej kontrolki
+						CTRL_OFF;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
 						renderCtrl(idx + ctrl_state[screen][0]);
 						btnExe = (idx + ctrl_state[screen][0])->key_exec;		// exe w zaleznosci od kontrolki
 
@@ -2249,12 +2249,62 @@ void satCustomInit()
 }
 void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
 
+void btnDecDist(bool on_off)
+{
+	if (conf.getInt("imp_src") == 0)											// GPS
+	{
+		distance1 -= 10;
+		distance2 -= 10;
+		computeDistance();
+	}
+	else
+	{
+		uint32_t temp = distance2 - 10;
+
+		while (temp < distance2)
+		{
+			if (pulses_cnt1) pulses_cnt1--;
+
+			if (pulses_cnt2) pulses_cnt2--;
+
+			computeDistance();
+		}
+	}
+
+	CTRL_OFF;
+	openScreen(screen, false);
+}
+
+void btnIncDist(bool on_off)
+{
+	if (conf.getInt("imp_src") == 0)											// GPS
+	{
+		distance1 += 10;
+		distance2 += 10;
+		computeDistance();
+	}
+	else
+	{
+		uint32_t temp = distance2 + 10;
+
+		while (temp > distance2)
+		{
+			pulses_cnt1++;
+			pulses_cnt2++;
+			computeDistance();
+		}
+	}
+
+	CTRL_OFF;
+	openScreen(screen, false);
+}
+
 void btnSaveTrk(bool on_off)
 {
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
-		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		CTRL_OFF;																// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		return;
 	}
 
@@ -2307,7 +2357,7 @@ void btnSaveWpt(bool on_off)
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
-		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		CTRL_OFF;																// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		return;
 	}
 
@@ -2351,13 +2401,13 @@ void btnNav2Wpt(bool on_off)
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
-		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		CTRL_OFF;																// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		return;
 	}
 
 	if (navi_state != NAVI_WPTS)
 	{
-		ctrl_state[screen][1] &= 0x7F;											// Skasuj MSB jako znacznik deaktywowanej kontrolki
+		CTRL_OFF;																// Skasuj MSB jako znacznik deaktywowanej kontrolki
 		screen = SCR_FILES;
 		openScreen(screen, false);
 		navi_state = NAVI_WPTS;													// Tryb nawigacji do waypointa
@@ -2374,7 +2424,7 @@ void btnPrevWptFile(bool on_off)
 	if (cur_file > 0) cur_file--;												// Poprzedni plik z listy
 	else cur_file = wptfile_lst.size() - 1;										// Ostatni plik
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
 
@@ -2383,21 +2433,21 @@ void btnNextWptFile(bool on_off)
 	if (cur_file < (wptfile_lst.size() - 1)) cur_file++;						// Nastepny plik z listy
 	else cur_file = 0;															// Pierwszy plik
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
 
 void btnInfoWptFile(bool on_off)
 {
 	parseGpxFile();
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	screen = SCR_GPXINFO;
 	openScreen(screen, false);													// Przejscie do ekranu z informacjami o zawartosci pliku gpx
 }
 
 void btnCancelGpxInfo(bool on_off)
 {
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
 	openScreen(screen, false);
 }
@@ -2405,14 +2455,14 @@ void btnCancelGpxInfo(bool on_off)
 void btnThisWptFile(bool on_off)
 {
 	parseGpxFile();																// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	screen = SCR_WPTS;
 	openScreen(screen, false);													// Przejscie do ekranu listy waypointow
 }
 
 void btnCancelFile(bool on_off)
 {
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	navi_state = NO_TARGET;														// Wylaczenie trybu nawigacji do waypointa
 	screen = SCR_NAVI;															// Powrot do ekranu glownego nawigacji
 	openScreen(screen, true);
@@ -2540,7 +2590,7 @@ void btnPrevWptSet(bool on_off)
 {
 	if (cur_wpt > (LIST_WPTS_LEN - 1)) cur_wpt -= LIST_WPTS_LEN;				// Poprzedni komplet waypointow
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
 
@@ -2555,7 +2605,7 @@ void btnNextWptSet(bool on_off)
 		else cur_wpt = wpt_lst.size() - 1;										// Albo ostatni waypoint
 	}
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
 
@@ -2564,7 +2614,7 @@ void btnPrevWpt(bool on_off)
 	if (cur_wpt > 0) cur_wpt--;													// Poprzedni waypoint z listy
 	else cur_wpt = wpt_lst.size() - 1;											// Ostatni waypoint
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
 void btnNextWpt(bool on_off)
@@ -2572,7 +2622,7 @@ void btnNextWpt(bool on_off)
 	if (cur_wpt < (wpt_lst.size() - 1)) cur_wpt++;								// Nastepny waypoint z listy
 	else cur_wpt = 0;															// Pierwszy waypoint
 
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
 
@@ -2582,13 +2632,13 @@ void btnThisWpt(bool on_off)
 	dest_wpt = *itr;
 	debugI("Waypoint NAME: %s LAT:%.5f LON:%.5f", dest_wpt.name, dest_wpt.lat, dest_wpt.lon);
 	screen = SCR_NAVI;															// Powrot do ekranu nawigacji
-	ctrl_state[screen][1] |= 0x80;												// Ustaw MSB jako znacznik aktywowanej kontrolki
+	CTRL_ON;																	// Ustaw MSB jako znacznik aktywowanej kontrolki
 	openScreen(screen, true);
 }
 
 void btnCancelWpt(bool on_off)
 {
-	ctrl_state[screen][1] &= 0x7F;												// Skasuj MSB jako znacznik deaktywowanej kontrolki
+	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	cur_wpt = 0;																// Listuj zawsze od pierwszego w nowo otwartym pliku
 	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
 	openScreen(screen, false);
@@ -2721,9 +2771,12 @@ point_t mtx_mul_vec(float mtx[], point_t xy)
 
 String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt)
 {
+	// https://www.szukaj-trasy.com/wgs84.html
+	// https://www.wspolrzedne-gps.pl/konwerter
 	String result;
 	char out[16];
 	long unsigned f103 = frac / 10000;
+
 	switch (fmt)
 	{
 		case GPS_SD:
@@ -2731,20 +2784,20 @@ String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt)
 			break;
 
 		case GPS_SMS:
-			//sprintf(out, "%d%c%lu'%lu.%lu\"", deg, 42 /*247*/, 
+			//sprintf(out, "%d%c%lu'%lu.%lu\"", deg, 42 /*247*/,
 			//(f103 * 60) / 100000,												// Minuty
 			//((f103 * 3600 / 100) - ((f103 * 60) / 100000) * 60 * 1000) / 1000,	// Sekundy
 			//((f103 * 3600 / 100) - ((f103 * 60) / 100000) * 60 * 1000) % 1000);	// Ulamki sekund
-			sprintf(out, "%d%c%02lu'%02lu.%03lu\"", deg, 42 /*247*/, 
-			(f103 * 6) / 10000,													// Minuty
-			((f103 * 36) - ((f103 * 6) / 10000) * 60000) / 1000,				// Sekundy
-			((f103 * 36) - ((f103 * 6) / 10000) * 60000) % 1000);				// Ulamki sekund
+			sprintf(out, "%d%c%02lu'%02lu.%03lu\"", deg, 42 /*247*/,
+			        (f103 * 6) / 10000,													// Minuty
+			        ((f103 * 36) - ((f103 * 6) / 10000) * 60000) / 1000,				// Sekundy
+			        ((f103 * 36) - ((f103 * 6) / 10000) * 60000) % 1000);				// Ulamki sekund
 			break;
 
 		case GPS_SMD:
 			sprintf(out, "%d%c%02lu.%04lu'", deg, 42 /*247*/,
-			(f103 * 6) / 10000,													// Minuty
-			(f103 * 6) - ((f103 * 6) / 10000) * 10000);							// Ulamki minut
+			        (f103 * 6) / 10000,													// Minuty
+			        (f103 * 6) - ((f103 * 6) / 10000) * 10000);							// Ulamki minut
 			break;
 	}
 

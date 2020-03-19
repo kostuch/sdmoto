@@ -59,6 +59,9 @@
 #define LIST_FILES_LEN	10														// Ilosc plikow mieszczacych sie na listingu
 #define LIST_WPTS_LEN	10														// Ilosc waypointow mieszczaca sie na listingu
 
+#define CTRL_ON			ctrl_state[screen][1] |= 0x80							// Makro wlaczajace nieaktywna kontrolke
+#define CTRL_OFF		ctrl_state[screen][1] &= 0x7F							// Makro wylaczajace aktywna kontrolke
+
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
 enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX,
@@ -261,13 +264,17 @@ void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r);				// Rysowani
 void renderWpt(uint16_t course, point_t xy, uint8_t shift, uint16_t color);		// Rysowanie symbolu waypointa na horyzoncie
 void addWpt2Trk(void);															// Zapis WPT do trasy .gpx
 void addWpt2Wpt(bool reset_num);												// Zapis WPT do zbioru waypointow .gpx
-String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt);
+String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt);		// Konwersja formatow wspolrzednych geograficznych
+void btnDecDist(bool on_off);													// Manualne zmniejszanie dystansu
+void btnIncDist(bool on_off);													// Manualne zwiekszanie dystansu
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 
 const btn_t ctrls_data[] PROGMEM =
 {
-	{0, 0, 45, 110, 56, 12, (char *) "Zatrzymaj", (char *) "Uruchom", btnStopStart},
+	{0, 0, 3, 110, 56, 12, (char *) "Zatrzymaj", (char *) "Uruchom", btnStopStart},
+	{0, 1, 96, 110, 22, 12, (char *) " - ", (char *) "", btnDecDist},
+	{0, 2, 128, 110, 22, 12, (char *) " + ", (char *) "", btnIncDist},
 	{2, 0, 3, 36, 70, 12, (char *) "Zapis TRK", (char *) "Zapis TRK", btnSaveTrk},
 	{2, 1, 3, 50, 70, 12, (char *) "Zapis WPT", (char *) "Zapis WPT", btnSaveWpt},
 	{2, 2, 3, 64, 70, 12, (char *) "Navi do WPT", (char *) "Navi do WPT", btnNav2Wpt},
