@@ -69,7 +69,7 @@ enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygn
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
 enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX,
                      GPS_DATETIME, MEM_FREE, MEM_AVG, MEM_FULL,
-                     SD_OK, SD_NOOK, SD_OFF, REC_ON, REC_OFF, OBD2_OFF, OBD2_AP, OBD2_IF, OBD2_CAR
+                     SD_OK, SD_NOOK, SD_OFF, REC_ON, REC_OFF, OBD2_OFF, OBD2_AP, OBD2_IF, OBD2_CAR, OBD2_ERROR
                 	};															// Elementy statusbara
 enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE,
                      SCR_WELCOME, SCR_FILES, SCR_WPTS, SCR_GPXINFO, SCR_OBD2
@@ -277,6 +277,7 @@ void btnOBD2Errors(bool on_off);
 void btnOBD2Reads1(bool on_off);
 void btnOBD2Reads2(bool on_off);
 void btnOBD2Reads3(bool on_off);
+String txOBD2(char * request);
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 

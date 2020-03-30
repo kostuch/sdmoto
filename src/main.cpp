@@ -1974,6 +1974,14 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			tft.print(F("OBD2"));
 			break;
 
+		case OBD2_ERROR:
+			tft.setCursor(TBARX_OBD2, 8);
+			tft.setTextSize(1);
+			tft.setTextFont(1);
+			tft.setTextColor(TFT_RED, TFT_BLACK);
+			tft.print(F("OBD2"));
+			break;
+
 		default:
 			break;
 	}
@@ -2316,24 +2324,11 @@ void btnOBD2Connect(bool on_off)
 			while (!client.connected()) delay(100);								// Czekaj na polaczenie socketa
 
 			renderToolbar(OBD2_AP);
-			client.print(F("ATI\r"));
-			uint32_t obd2_timeout = millis();
 
-			while (client.available() == 0)										// Czekaj na odpowiedz z interfejsu OBD2
-			{
-				if (millis() - obd2_timeout > OBD2_RESPONSE)
-				{
-					if (client.connected()) tft.drawString("OBD2 Time!", 80, 56);
-				}
-			}
-
-			String obd2_response = "";
-
-			while (client.available()) obd2_response += char(client.read());	// Odpowiedz z interfejsu OBD2
-				
-			if (obd2_response.startsWith(F("ATI\rELM327"))) renderToolbar(OBD2_IF);
-
-			tft.drawString(obd2_response, 0, 112);
+			if (String(txOBD2("ATI\r").startsWith(F("ATI\rELM327")))) renderToolbar(OBD2_IF);
+			
+			txOBD2((char *)"ATE0\r");											// Echo OFF
+			tft.drawString(txOBD2("AT@1\r"), 0, 112);							// DEBUG
 		}
 		else																	// Nie udalo sie polaczyc z interfejsem OBD2
 		{
@@ -2376,6 +2371,30 @@ void btnOBD2Errors(bool on_off) {}
 void btnOBD2Reads1(bool on_off) {}
 void btnOBD2Reads2(bool on_off) {}
 void btnOBD2Reads3(bool on_off) {}
+
+String txOBD2(char *request)
+{
+	String obd2_response = "";
+	client.print(request);														// Wyslij komende do ELM327
+	uint32_t obd2_timeout = millis();
+
+	while (client.available() == 0)												// Czekaj na odpowiedz z interfejsu OBD2
+	{
+		if (millis() - obd2_timeout > OBD2_RESPONSE)
+		{
+			if (client.connected())
+			{
+				renderToolbar(OBD2_ERROR);										// Timeout
+				return obd2_response;											// Pusty string
+			}
+		}
+	}
+
+	while (client.available()) obd2_response += char(client.read());			// Odpowiedz z interfejsu OBD2 i/lub ECU
+
+	return obd2_response;
+}
+
 void meantimeSave(void)
 {
 	static uint8_t positions;													// Pierwszy miedzyczas
