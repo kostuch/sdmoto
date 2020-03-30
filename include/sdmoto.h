@@ -42,10 +42,13 @@
 #define TBARX_MEMORY	64
 #define TBARX_SD		96
 #define TBARX_TIME		128
+#define TBARX_OBD2		128
 
-#define MAX_SCREENS		9														// Ilosc ekranow aplikacji
+#define MAX_SCREENS		11														// Ilosc ekranow aplikacji
 #define LONG_PRESS		500														// Czas dlugiego wcisniecia [ms]
-#define AP_TIMEOUT		10														// Czas na polaczenie z Access Pointem
+#define AP_TIMEOUT		20														// Czas na polaczenie z Access Pointem [polowki s]
+#define OBD2_CONNECT	5000													// Czas na podlaczenie do AP OBD2 [ms]
+#define OBD2_RESPONSE	2000													// Czas na odpowiedz interfejsu OBD2 [ms]
 #define SCR_SAVER_TIME	1														// Czas do wlaczenia screensavera
 #define SAVE_TIME		5														// Co 5 sekund zapis dystansow do pamieci
 #define MAX_SATS		20														// Maksymalna liczba widzianych satelitow
@@ -66,10 +69,10 @@ enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygn
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
 enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX,
                      GPS_DATETIME, MEM_FREE, MEM_AVG, MEM_FULL,
-                     SD_OK, SD_NOOK, SD_OFF, REC_ON, REC_OFF
+                     SD_OK, SD_NOOK, SD_OFF, REC_ON, REC_OFF, OBD2_OFF, OBD2_AP, OBD2_IF, OBD2_CAR
                 	};															// Elementy statusbara
 enum SCREENS		{SCR_DIST, SCR_TIME, SCR_NAVI, SCR_COMBO, SCR_GPS, SCR_UPDATE,
-                     SCR_WELCOME, SCR_FILES, SCR_WPTS, SCR_GPXINFO
+                     SCR_WELCOME, SCR_FILES, SCR_WPTS, SCR_GPXINFO, SCR_OBD2
               		};															// Ekrany
 enum NAVI_STATES	{NO_TARGET, REC_TRK, REC_WPTS, NAVI_WPTS};					// Stany nawigacji
 enum BTN_MODES		{CHG_SCR, CHG_CTRL};										// Tryby dzialania przyciskow
@@ -206,7 +209,7 @@ void setupPins(void);															// Ustawienie pinow GPIO
 void readConf(void);															// Odczyt konfiguracji urzadzenia
 void startWebServer(void);														// Web server
 void initWiFi(void);															// Inicjalizacja WiFi
-void initWiFiStaAp(void);														// Wlaczenie Station albo AccesPoint
+void initWiFiStaAp(bool fallback2AP);											// Wlaczenie Station albo AccesPoint
 void handleRoot(void);															// www/
 void handleConf(void);															// www/conf
 void handleLogin(void);
@@ -233,6 +236,8 @@ void openTime(void);															// Otwarcie ekranu - stoper
 void openNavi(void);															// Otwarcie ekranu - nawigacja
 void openCombo(void);															// Otwarcie ekranu - combo
 void openGPS(void);																// Otwarcie ekranu - gps
+void openOBD2(void);
+void closeOBD2(void);
 void openWptFileList(void);														// Otwarcie ekranu - wybor pliku
 void openWptList(void);															// Otwarcie ekranu - wybor waypointa
 void openGpxInfo(void);															// Otwarcie ekranu - informacje o zawartosci gpx
@@ -267,6 +272,11 @@ void addWpt2Wpt(bool reset_num);												// Zapis WPT do zbioru waypointow .g
 String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt);		// Konwersja formatow wspolrzednych geograficznych
 void btnDecDist(bool on_off);													// Manualne zmniejszanie dystansu
 void btnIncDist(bool on_off);													// Manualne zwiekszanie dystansu
+void btnOBD2Connect(bool on_off);
+void btnOBD2Errors(bool on_off);
+void btnOBD2Reads1(bool on_off);
+void btnOBD2Reads2(bool on_off);
+void btnOBD2Reads3(bool on_off);
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 
@@ -289,7 +299,12 @@ const btn_t ctrls_data[] PROGMEM =
 	{8, 3, 128, 78, 28, 12, (char *) "v", (char *) "", btnNextWpt},
 	{8, 4, 128, 92, 28, 12, (char *) "OK", (char *) "", btnThisWpt},
 	{8, 5, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelWpt},
-	{9, 0, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelGpxInfo}
+	{9, 0, 128, 106, 28, 12, (char *) "<==", (char *) "", btnCancelGpxInfo},
+	{10, 0, 3, 36, 70, 12, (char *) "Polacz OBD2", (char *) "Odlacz OBD2", btnOBD2Connect},
+	{10, 1, 3, 50, 70, 12, (char *) "Bledy", (char *) "", btnOBD2Errors},
+	{10, 2, 3, 64, 70, 12, (char *) "Odczyty 1", (char *) "", btnOBD2Reads1},
+	{10, 3, 3, 78, 70, 12, (char *) "Odczyty 2", (char *) "", btnOBD2Reads2},
+	{10, 4, 3, 92, 70, 12, (char *) "Odczyty 3", (char *) "", btnOBD2Reads3}
 };
 
 const screen_t screen_data[] PROGMEM =
@@ -303,7 +318,8 @@ const screen_t screen_data[] PROGMEM =
 	{6, (char *) "", NULL, NULL},												// Dummy (welcome)
 	{7, (char *) "Pliki WPT", openWptFileList, NULL},							// Pliki gpx
 	{8, (char *) "Waypointy", openWptList, NULL},								// Waypointy
-	{9, (char *) "GPX Info", openGpxInfo, NULL}									// Informacja o gpx
+	{9, (char *) "GPX Info", openGpxInfo, NULL},								// Informacja o gpx
+	{10, (char *) "OBD2", openOBD2, closeOBD2}									// OBD2 diag
 };
 
 #endif /* SDMOTO_H_ */

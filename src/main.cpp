@@ -45,6 +45,7 @@ ESP8266WebServer	web_server;													// Web server
 WebConfig			conf;														// Konfigurator webowy
 fs::File			SPIFFS_file;												// Plik na SPIFFS
 ESP8266WiFiMulti	wifi_multi;													// WiFi
+WiFiClient			client;														// Klient wifi (dla OBD2)
 WiFiEventHandler	SAPstationConnectedHandler;
 WiFiEventHandler	SAPstationDisconnectedHandler;
 WiFiEventHandler	STAstationGotIPHandler;
@@ -153,7 +154,7 @@ void setupOTA()
 
 void loop()
 {
-	static uint32_t second;
+	static uint32_t h_second;
 
 	if (pcf_signal) btnCheck();													// Okresl stan przyciskow
 
@@ -170,10 +171,10 @@ void loop()
 
 	if (!connected)																// Jezeli nie ma WiFi
 	{
-		if ((millis() - second) > 1000)											// Co sekunde
+		if ((millis() - h_second) > 500)										// Co pol sekundy
 		{
-			initWiFiStaAp();													// Probuj
-			second = millis();													// Uaktualnij zmienna
+			initWiFiStaAp(true);												// Probuj STA, ewentualnie wlacz AP
+			h_second = millis();												// Uaktualnij zmienna
 		}
 	}
 
@@ -463,6 +464,14 @@ void readConf()
 	            "'default':'moje_haslo_2'"
 	            "},"
 	            "{"
+	            "'name':'obd2_net',"
+	            "'label':'Sieć dla OBD2',"
+	            "'type':");
+	params += String(INPUTTEXT);
+	params += F(","
+	            "'default':'OBD2'"
+	            "},"
+	            "{"
 	            "'name':'imp_src',"
 	            "'label':'Dane o dystansie',"
 	            "'type':");
@@ -517,6 +526,14 @@ void readConf()
 	            "{"
 	            "'name':'scr_gps',"
 	            "'label':'GPS',"
+	            "'type':");
+	params += String(INPUTCHECKBOX);
+	params += F(","
+	            "'default':'1'"
+	            "},"
+	            "{"
+	            "'name':'scr_obd2',"
+	            "'label':'OBD2',"
 	            "'type':");
 	params += String(INPUTCHECKBOX);
 	params += F(","
@@ -675,53 +692,15 @@ String macToString(const unsigned char *mac)
 	return String(buf);
 }
 
-void onStationConnected(const WiFiEventSoftAPModeStationConnected &evt)
-{
-	//Serial.print(F("Station connected: "));
-	//Serial.println(macToString(evt.mac));
-	tft.fillCircle(60, 29, 3, TFT_RED);
-}
-
-void onStationDisconnected(const WiFiEventSoftAPModeStationDisconnected &evt)
-{
-	//Serial.print(F("Station disconnected: "));
-	//Serial.println(macToString(evt.mac));
-	tft.fillCircle(60, 29, 3, TFT_BLACK);
-}
-
-void onWiFiModeChanged(const WiFiEventModeChange &evt)
-{
-	//Serial.printf_P(PSTR("WiFi mode changed to %d\r\n"), WiFi.getMode());
-}
-
-void onStationGotIP(const WiFiEventStationModeGotIP &evt)
-{
-	//tft.setTextColor(TFT_WHITE);
-	//tft.setCursor(40, 0);
-	//tft.print(WiFi.localIP);
-}
-
-void onClientDisconnected(const WiFiEventStationModeDisconnected &evt)
-{
-	//Serial.println("Disconnected from AP " + evt.ssid + " because of " + evt.reason);
-}
-
 void initWiFi()
 {
-	// AP mode
-	SAPstationConnectedHandler = WiFi.onSoftAPModeStationConnected(&onStationConnected);
-	SAPstationDisconnectedHandler = WiFi.onSoftAPModeStationDisconnected(&onStationDisconnected);
-	// STA mode
-	STAstationGotIPHandler = WiFi.onStationModeGotIP(&onStationGotIP);
-	STAstationDisconnectedHandler = WiFi.onStationModeDisconnected(&onClientDisconnected);
-	wifiModeChanged = WiFi.onWiFiModeChange(&onWiFiModeChanged);
 	WiFi.persistent(false);														// Nie zapisuj konfiga WiFi we FLASH
 	WiFi.mode(WIFI_STA);														// Tryb STATION
 	wifi_multi.addAP(conf.getValue("ssid1"), conf.getValue("pwd1"));			// Dodaj pierwsza siec
 	wifi_multi.addAP(conf.getValue("ssid2"), conf.getValue("pwd2"));			// Dodaj druga siec
 }
 
-void initWiFiStaAp()
+void initWiFiStaAp(bool fallback2AP)
 {
 	static uint8_t ap_time;
 
@@ -729,26 +708,31 @@ void initWiFiStaAp()
 	{
 		if (ap_time++ > AP_TIMEOUT)
 		{
-			IPAddress local_IP(10, 0, 0, 1);
-			IPAddress gateway(10, 0, 0, 1);
-			IPAddress subnet(255, 0, 0, 0);
-			WiFi.softAPConfig(local_IP, gateway, subnet);
-			WiFi.softAP(conf.getApName(), conf.getValue("dev_pwd"));			// Ustaw tryb Access Pointa
-			connected = true;													// Ustaw flage
-			internet = false;
-			renderToolbar(WIFI_XAP);											// Aktualizuj ikone na toolbarze
-			startWebServer();													// Wystartuj Serwer www
-			debugInit();
+			if (fallback2AP)													// Jezeli jest opcja stworzenia AP
+			{
+				IPAddress local_IP(10, 0, 0, 1);
+				IPAddress gateway(10, 0, 0, 1);
+				IPAddress subnet(255, 0, 0, 0);
+				WiFi.softAPConfig(local_IP, gateway, subnet);
+				WiFi.softAP(conf.getApName(), conf.getValue("dev_pwd"));		// Ustaw tryb Access Pointa
+				connected = true;												// Ustaw flage
+				internet = false;
+				renderToolbar(WIFI_XAP);										// Aktualizuj ikone na toolbarze
+				startWebServer();												// Wystartuj Serwer www
+				debugInit();
+				ap_time = 0;													// Wyzeruj timeout na potrzeby reconnecta
+			}
 		}
 	}
 	else
 	{
-		connected = true;															// Flaga polaczenia
-		internet = true;															// Flaga dostepu do internetu
-		renderToolbar(WIFI_XSTA);													// Aktualizuj ikone na pasku
-		WiFi.hostname(conf.getApName());											// Nazwa hosta (kosmetyka)
-		startWebServer();															// Wystartuj Serwer www
+		connected = true;														// Flaga polaczenia
+		internet = true;														// Flaga dostepu do internetu
+		renderToolbar(WIFI_XSTA);												// Aktualizuj ikone na pasku
+		WiFi.hostname(conf.getApName());										// Nazwa hosta (kosmetyka)
+		startWebServer();														// Wystartuj Serwer www
 		debugInit();
+		ap_time = 0;															// Wyzeruj timeout na potrzeby reconnecta
 	}
 }
 
@@ -1410,7 +1394,8 @@ void prevScr()
 	switch (screen)
 	{
 		case SCR_DIST:
-			if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
 			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
@@ -1419,6 +1404,7 @@ void prevScr()
 
 		case SCR_TIME:
 			if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
@@ -1428,6 +1414,7 @@ void prevScr()
 		case SCR_NAVI:
 			if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 
@@ -1437,6 +1424,7 @@ void prevScr()
 			if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
 			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
 
 			break;
@@ -1446,12 +1434,22 @@ void prevScr()
 			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
 			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
+
+			break;
+
+		case SCR_OBD2:
+			if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
 
 			break;
 
 		default:
-			screen = SCR_NAVI;													// Wyjscie z podekranow nawigacji
-			navi_state = NO_TARGET;												// Wylacz tryb nawigacji
+			//screen = SCR_NAVI;													// Wyjscie z podekranow nawigacji
+			//navi_state = NO_TARGET;												// Wylacz tryb nawigacji
 			break;
 	}
 
@@ -1467,6 +1465,7 @@ void nextScr()
 			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 
 			break;
 
@@ -1474,6 +1473,7 @@ void nextScr()
 			if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
 
 			break;
@@ -1481,6 +1481,7 @@ void nextScr()
 		case SCR_NAVI:
 			if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
 			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
 
@@ -1488,6 +1489,7 @@ void nextScr()
 
 		case SCR_COMBO:
 			if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+			else if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
 			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
 			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
 			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
@@ -1495,16 +1497,26 @@ void nextScr()
 			break;
 
 		case SCR_GPS:
-			if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			if (conf.getInt("scr_obd2") == 1) screen = SCR_OBD2;
+			else if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
 			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
 			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
 			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
 
 			break;
 
+		case SCR_OBD2:
+			if (conf.getInt("scr_dist") == 1) screen = SCR_DIST;
+			else if (conf.getInt("scr_time") == 1) screen = SCR_TIME;
+			else if (conf.getInt("scr_navi") == 1) screen = SCR_NAVI;
+			else if (conf.getInt("scr_combo") == 1) screen = SCR_COMBO;
+			else if (conf.getInt("scr_gps") == 1) screen = SCR_GPS;
+
+			break;
+
 		default:
-			screen = SCR_NAVI;													// Wyjscie z podekranow nawigacji
-			navi_state = NO_TARGET;												// Wylacz tryb nawigacji
+			//screen = SCR_NAVI;													// Wyjscie z podekranow nawigacji
+			//navi_state = NO_TARGET;												// Wylacz tryb nawigacji
 			break;
 	}
 
@@ -1845,7 +1857,7 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 	switch (item)
 	{
 		case WIFI_XOFF:
-			tft.drawBitmap(TBARX_WIFI, 0, wifi_sym, 32, 32, TFT_LIGHTGREY);
+			tft.drawBitmap(TBARX_WIFI, 0, wifi_sym, 32, 32, TFT_LIGHTGREY, TFT_BLACK);
 			break;
 
 		case WIFI_XAP:
@@ -1930,6 +1942,38 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 			tft.fillRect(TBARX_TIME, 16, 30, 8, TFT_BLACK);
 			break;
 
+		case OBD2_OFF:
+			tft.setCursor(TBARX_OBD2, 8);
+			tft.setTextSize(1);
+			tft.setTextFont(1);
+			tft.setTextColor(TFT_BLACK, TFT_BLACK);
+			tft.print(F("OBD2"));
+			break;
+
+		case OBD2_AP:
+			tft.setCursor(TBARX_OBD2, 8);
+			tft.setTextSize(1);
+			tft.setTextFont(1);
+			tft.setTextColor(TFT_BLUE, TFT_BLACK);
+			tft.print(F("OBD2"));
+			break;
+
+		case OBD2_IF:
+			tft.setCursor(TBARX_OBD2, 8);
+			tft.setTextSize(1);
+			tft.setTextFont(1);
+			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+			tft.print(F("OBD2"));
+			break;
+
+		case OBD2_CAR:
+			tft.setCursor(TBARX_OBD2, 8);
+			tft.setTextSize(1);
+			tft.setTextFont(1);
+			tft.setTextColor(TFT_GREEN, TFT_BLACK);
+			tft.print(F("OBD2"));
+			break;
+
 		default:
 			break;
 	}
@@ -1942,6 +1986,10 @@ void computeDistance()
 		distance1 = (pulses_cnt1 * 100) / calibration.dist_cal;					// Obliczenie dystansu
 		distance2 = (pulses_cnt2 * 100) / calibration.dist_cal;
 	}
+
+	if (distance1 > 9999999) distance1 = 9999999;
+
+	if (distance2 > 9999999) distance2 = 9999999;
 }
 
 void computeSpeed()
@@ -2226,6 +2274,108 @@ void openGPS()
 	tft.printf_P("FIX:  %3d s", gps.location.age() < 999000 ? gps.location.age() / 1000 : 0);
 }
 
+void openOBD2()
+{
+	clearWindow();
+}
+
+void closeOBD2() {}
+
+void btnOBD2Connect(bool on_off)
+{
+	if (on_off)																	// Laczenie do OBD2
+	{
+		if (WiFi.getMode() == WIFI_STA)											// Jezeli jako stacja podlaczona do AP
+		{
+			WiFi.disconnect();													// Odlacz
+
+			while (WiFi.isConnected()) delay(100);								// Czekaj na odlaczenie
+
+			wifi_multi.cleanAPlist();											// Wyczysc liste sieci
+		}
+		else WiFi.mode(WIFI_STA);												// Jezeli byl jako AP, ustaw tryb stacji
+
+		renderToolbar(WIFI_XOFF);
+		wifi_multi.addAP(conf.getValue("obd2_net"));							// Dodaj siec interface OBD2
+		connected = false;														// Skasuj flagi polaczenia
+		internet = false;
+		uint32_t timeout = millis();
+
+		while (!connected)														// Czekaj na polaczenie z interfejsem OBD2
+		{
+			initWiFiStaAp(false);												// Bez opcji zostania AP
+			delay(500);
+
+			if ((millis() - timeout) > OBD2_CONNECT) break;						// Timeout na polaczenie do AP OBD2
+		}
+
+		if (WiFi.isConnected())													// Jezeli polaczony z AP OBD2
+		{
+			client.connect(WiFi.gatewayIP(), 35000);							// Polacz z interfejsem OBD2 na port 35000
+
+			while (!client.connected()) delay(100);								// Czekaj na polaczenie socketa
+
+			renderToolbar(OBD2_AP);
+			client.print(F("ATI\r"));
+			uint32_t obd2_timeout = millis();
+
+			while (client.available() == 0)										// Czekaj na odpowiedz z interfejsu OBD2
+			{
+				if (millis() - obd2_timeout > OBD2_RESPONSE)
+				{
+					if (client.connected()) tft.drawString("OBD2 Time!", 80, 56);
+				}
+			}
+
+			String obd2_response = "";
+
+			while (client.available()) obd2_response += char(client.read());	// Odpowiedz z interfejsu OBD2
+				
+			if (obd2_response.startsWith(F("ATI\rELM327"))) renderToolbar(OBD2_IF);
+
+			tft.drawString(obd2_response, 0, 112);
+		}
+		else																	// Nie udalo sie polaczyc z interfejsem OBD2
+		{
+			wifi_multi.cleanAPlist();											// Wyczysc liste sieci
+			initWiFi();															// Inicjalizuj sieci WiFi poza OBD2
+
+			while (!connected)													// Czekaj na polaczenie do normalnej sieci
+			{
+				initWiFiStaAp(true);
+				delay(500);
+			}
+
+			CTRL_OFF;															// Wylacz kontrolke
+			openScreen(SCR_OBD2, true);											// Przerysuj ekran
+		}
+	}
+	else																		// Odlaczenie z OBD2
+	{
+		if (client.connected()) client.stop();									// Zatrzymaj klienta wifi
+
+		while (client.connected()) delay(100);									// Czekaj na zamkniecie socketa
+
+		renderToolbar(OBD2_OFF);
+		WiFi.disconnect();														// Odlacz
+		wifi_multi.cleanAPlist();												// Wyczysc liste sieci
+		renderToolbar(WIFI_XOFF);
+		connected = false;														// Skasuj flagi polaczenia
+		internet = false;
+		initWiFi();																// Inicjalizuj WiFi bez OBD2
+
+		while (!connected)
+		{
+			initWiFiStaAp(true);
+			delay(500);
+		}
+	}
+}
+
+void btnOBD2Errors(bool on_off) {}
+void btnOBD2Reads1(bool on_off) {}
+void btnOBD2Reads2(bool on_off) {}
+void btnOBD2Reads3(bool on_off) {}
 void meantimeSave(void)
 {
 	static uint8_t positions;													// Pierwszy miedzyczas
@@ -2236,7 +2386,6 @@ void meantimeSave(void)
 	tft.setTextColor(TFT_YELLOW, TFT_BLACK);
 	tft.printf("%02d:%02d:%02d.%02d", tmr_hrs, tmr_mins, tmr_secs, tmr_frac);
 }
-
 void satCustomInit()
 {
 	for (uint8_t i = 0; i < 4; ++i)												// Inicjalizacja statystyk satelitow
@@ -2248,12 +2397,11 @@ void satCustomInit()
 	}
 }
 void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
-
 void btnDecDist(bool on_off)
 {
 	if (conf.getInt("imp_src") == 0)											// GPS
 	{
-		distance1 -= 10;
+		distance1 -= 10;														// Zmniejsz dystancse o okolo 10m
 		distance2 -= 10;
 		computeDistance();
 	}
@@ -2261,9 +2409,9 @@ void btnDecDist(bool on_off)
 	{
 		uint32_t temp = distance2 - 10;
 
-		while (temp < distance2)
+		while (temp < distance2)												// Zmniejszaj liczbe impulsow az zmieni sie o 10
 		{
-			if (pulses_cnt1) pulses_cnt1--;
+			if (pulses_cnt1) pulses_cnt1--;										// Tylko jezeli jest z czego odejmowac
 
 			if (pulses_cnt2) pulses_cnt2--;
 
@@ -2274,7 +2422,6 @@ void btnDecDist(bool on_off)
 	CTRL_OFF;
 	openScreen(screen, false);
 }
-
 void btnIncDist(bool on_off)
 {
 	if (conf.getInt("imp_src") == 0)											// GPS
@@ -2287,6 +2434,8 @@ void btnIncDist(bool on_off)
 	{
 		uint32_t temp = distance2 + 10;
 
+		if (temp > 9999999) temp = distance2;									// Zabezpieczenie przed przekroczeniem zakresu
+
 		while (temp > distance2)
 		{
 			pulses_cnt1++;
@@ -2298,7 +2447,6 @@ void btnIncDist(bool on_off)
 	CTRL_OFF;
 	openScreen(screen, false);
 }
-
 void btnSaveTrk(bool on_off)
 {
 	if (!fix)
@@ -2332,7 +2480,6 @@ void btnSaveTrk(bool on_off)
 		renderToolbar(REC_OFF);													// Na toolbarze usun wskaznik nagrywania
 	}
 }
-
 void addWpt2Trk(void)
 {
 	char wpt_date[22];															// Data zalogowania WPT
@@ -2351,7 +2498,6 @@ void addWpt2Trk(void)
 	SPIFFS_file.print(F("\t\t</trkseg>\r\n\t</trk>\r\n</gpx>\r\n"));			// Ostatnie 30 bajtow
 	SPIFFS_file.close();
 }
-
 void btnSaveWpt(bool on_off)
 {
 	if (!fix)
@@ -2377,7 +2523,6 @@ void btnSaveWpt(bool on_off)
 	}
 	else navi_state = NO_TARGET;
 }
-
 void addWpt2Wpt(bool reset_num)
 {
 	static uint16_t wpt_num;													// Licznik waypointow
@@ -2395,7 +2540,6 @@ void addWpt2Wpt(bool reset_num)
 	SPIFFS_file.printf_P("\t<name>WPT-%03d</name>\r\n\t</wpt>\r\n</gpx>\r\n", wpt_num++);
 	SPIFFS_file.close();
 }
-
 void btnNav2Wpt(bool on_off)
 {
 	if (!fix)
@@ -2418,7 +2562,6 @@ void btnNav2Wpt(bool on_off)
 		tft.fillRect(96, 32, 64, 96, TFT_BLACK);								// Usun horyzont
 	}
 }
-
 void btnPrevWptFile(bool on_off)
 {
 	if (cur_file > 0) cur_file--;												// Poprzedni plik z listy
@@ -2427,7 +2570,6 @@ void btnPrevWptFile(bool on_off)
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
-
 void btnNextWptFile(bool on_off)
 {
 	if (cur_file < (wptfile_lst.size() - 1)) cur_file++;						// Nastepny plik z listy
@@ -2436,7 +2578,6 @@ void btnNextWptFile(bool on_off)
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
-
 void btnInfoWptFile(bool on_off)
 {
 	parseGpxFile();
@@ -2444,14 +2585,12 @@ void btnInfoWptFile(bool on_off)
 	screen = SCR_GPXINFO;
 	openScreen(screen, false);													// Przejscie do ekranu z informacjami o zawartosci pliku gpx
 }
-
 void btnCancelGpxInfo(bool on_off)
 {
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
 	openScreen(screen, false);
 }
-
 void btnThisWptFile(bool on_off)
 {
 	parseGpxFile();																// Sprawdzenie poprawnosci xml i parsowanie do listy waypointow
@@ -2459,7 +2598,6 @@ void btnThisWptFile(bool on_off)
 	screen = SCR_WPTS;
 	openScreen(screen, false);													// Przejscie do ekranu listy waypointow
 }
-
 void btnCancelFile(bool on_off)
 {
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
@@ -2467,7 +2605,6 @@ void btnCancelFile(bool on_off)
 	screen = SCR_NAVI;															// Powrot do ekranu glownego nawigacji
 	openScreen(screen, true);
 }
-
 void parseGpxFile()
 {
 	wpt_lst.clear();															// Wyczysc listy waypointow
@@ -2585,7 +2722,6 @@ void XML_callback(uint8_t statusflags, char *tagName, uint16_t tagNameLen, char 
 		trk_lst.push_back(temp_trk);											// Dodaj track do listy
 	}
 }
-
 void btnPrevWptSet(bool on_off)
 {
 	if (cur_wpt > (LIST_WPTS_LEN - 1)) cur_wpt -= LIST_WPTS_LEN;				// Poprzedni komplet waypointow
@@ -2593,7 +2729,6 @@ void btnPrevWptSet(bool on_off)
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
-
 void btnNextWptSet(bool on_off)
 {
 	uint16_t wpts_set_no = cur_wpt / LIST_WPTS_LEN;								// Nr "Kompletu" waypointow
@@ -2608,7 +2743,6 @@ void btnNextWptSet(bool on_off)
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
-
 void btnPrevWpt(bool on_off)
 {
 	if (cur_wpt > 0) cur_wpt--;													// Poprzedni waypoint z listy
@@ -2625,7 +2759,6 @@ void btnNextWpt(bool on_off)
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
 	openScreen(screen, false);													// Przerysuj ekran
 }
-
 void btnThisWpt(bool on_off)
 {
 	SimpleList<wpt_t>::iterator itr = wpt_lst.begin() + cur_wpt;
@@ -2635,7 +2768,6 @@ void btnThisWpt(bool on_off)
 	CTRL_ON;																	// Ustaw MSB jako znacznik aktywowanej kontrolki
 	openScreen(screen, true);
 }
-
 void btnCancelWpt(bool on_off)
 {
 	CTRL_OFF;																	// Skasuj MSB jako znacznik deaktywowanej kontrolki
@@ -2643,7 +2775,6 @@ void btnCancelWpt(bool on_off)
 	screen = SCR_FILES;															// Powrot do ekranu z listingiem gpx
 	openScreen(screen, false);
 }
-
 void satUpdateStats()
 {
 	/*
@@ -2697,7 +2828,6 @@ void satUpdateStats()
 		slot = 0;
 	}
 }
-
 void renderWpt(uint16_t course, point_t xy, uint8_t shift, uint16_t color)
 {
 	static point_t wpt_xy;														// Wspolrzedne srodku kolka waypointa
@@ -2706,7 +2836,6 @@ void renderWpt(uint16_t course, point_t xy, uint8_t shift, uint16_t color)
 	wpt_xy = mtx_mul_vec(*trt_mtx, (point_t) {xy.x, xy.y - shift});				// Oblicz polozenie srodka kolka waypointa
 	tft.fillCircle(wpt_xy.x, wpt_xy.y, 3, color);								// Narysuj kolko waypointa
 }
-
 void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r)
 {
 	static point_t n, s, w, e;
@@ -2727,7 +2856,6 @@ void renderCompassNeedle(uint16_t course, point_t xy, uint8_t r)
 	tft.fillTriangle(s.x, s.y, e.x, e.y, w.x, w.y, TFT_WHITE);					// Biala igla
 	old_r = r;
 }
-
 void renderScreenSaver()
 {
 	tft.setTextColor(random(65535), TFT_BLACK);
@@ -2752,7 +2880,6 @@ void make_trt_mtx(point_t xy, float phi)
 	trt_mtx[2][0] = (xy.x * (1 - cos(phi))) + (xy.y * sin(phi));
 	trt_mtx[2][1] = (-xy.x * sin(phi)) + (xy.y * (1 - cos(phi)));
 }
-
 point_t mtx_mul_vec(float mtx[], point_t xy)
 {
 	// Macierz B musi posiadac tyle wierszy, ile kolumn posiada macierz A.
@@ -2768,7 +2895,6 @@ point_t mtx_mul_vec(float mtx[], point_t xy)
 	point.y = xy.x * mtx[1] + xy.y * mtx[4] + mtx[7];
 	return point;
 }
-
 String gpsFormatConvert(uint8_t deg, uint32_t frac, enum GPS_FORMATS fmt)
 {
 	// https://www.szukaj-trasy.com/wgs84.html
