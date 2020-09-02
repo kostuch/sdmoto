@@ -49,7 +49,7 @@
 #define AP_TIMEOUT		20														// Czas na polaczenie z Access Pointem [polowki s]
 #define OBD2_CONNECT	5000													// Czas na podlaczenie do AP OBD2 [ms]
 #define OBD2_RESPONSE	2000													// Czas na odpowiedz interfejsu OBD2 [ms]
-#define SCR_SAVER_TIME	1														// Czas do wlaczenia screensavera
+#define SCR_SAVER_TIME	5														// Czas do wlaczenia screensavera
 #define SAVE_TIME		5														// Co 5 sekund zapis dystansow do pamieci
 #define MAX_SATS		20														// Maksymalna liczba widzianych satelitow
 #define MAX_DOP			10														// Najgorsza precyzja [m]
@@ -161,6 +161,7 @@ uint32_t distance1, distance2;													// Dystanse (odcinka i globalny)
 uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lokalizacja
 uint8_t speed;																	// Predkosc
 uint16_t volt;																	// Napiecie
+uint16_t temperature;															// Temperatura
 uint32_t tmr_start_time;														// Czas stoperowy
 uint8_t ctrl_state[MAX_SCREENS][2];												// #def ekranow, pozycja ramki, nr aktywnej kontrolki
 uint32_t tmr_ms;																// Liczba milisekund stopera
@@ -228,6 +229,7 @@ String HTMLFooter(void);														// Generowanie stopki HTML
 void computeDistance(void);														// Obliczanie przebytego dystansu
 void computeSpeed(void);														// Obliczanie predkosci
 void computeVolt(void);															// Obliczanie napiecia
+void computeTemp(void);															// Obliczanie temperatury
 void computeTime(void);															// Obliczanie czasu
 uint8_t computeEraseArea(uint32_t new_val, uint32_t old_val, uint8_t length);	// Obliczanie obszaru do zamazania
 void clearWindow(void);															// Czyszczenie dolnej czesci ekranu
@@ -277,7 +279,9 @@ void btnOBD2Errors(bool on_off);
 void btnOBD2Reads1(bool on_off);
 void btnOBD2Reads2(bool on_off);
 void btnOBD2Reads3(bool on_off);
-String txOBD2(char * request);
+String txRawOBD2(const char *request);
+String txATOBD2(const char *request);
+void initOBD2(void);
 
 const char obrazek[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAA ... KIB8b8B4VUyW9YaqDwAAAAASUVORK5CYII=' alt=''>";
 

@@ -249,6 +249,7 @@ void everySecTask()
 		even_odd ^= 1;															// Co sekunde zmien flage
 		computeSpeed();															// Aktualizacja predkosci
 		computeVolt();															// Aktualizacja napiecia
+		computeTemp();															// Aktualizacja temperatury
 
 		if (save_time++ > SAVE_TIME)											// Co pewien czas
 		{
@@ -1739,7 +1740,7 @@ void renderScreen(enum SCREENS scr)
 			tft.setCursor(100, 96);
 			tft.printf_P("%2d.%d V", volt / 10, volt % 10);						// Napiecie
 			tft.setCursor(100, 114);
-			tft.printf_P("%3d %cC", calibration.temp_cal, 247);					// Temperatura debug
+			tft.printf_P("%3d %cC", temperature, 247);							// Temperatura debug
 
 			if (new_course)														// Nowy kurs
 			{
@@ -1753,7 +1754,7 @@ void renderScreen(enum SCREENS scr)
 
 			speed_gauge.update(speed);
 			volt_gauge.update(volt / 10);
-			temp_gauge.update(calibration.temp_cal);							// debug
+			temp_gauge.update(temperature);										// debug
 			break;
 
 		case SCR_GPS:
@@ -2018,10 +2019,24 @@ void computeSpeed()
 void computeVolt()
 {
 	static uint16_t old_volt;
+	debugI("Volt (raw): %d", analogRead(A0));
 	volt = (analogRead(A0) * 22 * 10) / 1024.0;									// dzielnik rezystorowy 1:22 [*10]
 	volt = (volt * 100) / calibration.volt_cal;									// Kalibracja
 	volt = (volt + old_volt) / 2;												// Srednia z dwoch pomiarow
 	old_volt = volt;															// Zapamietaj poprzednia wartosc
+}
+
+void computeTemp()
+{
+	static uint16_t old_temp;
+	mux_switch(STARTUP);
+	debugI("Temperature (raw): %d", analogRead(A0));
+	temperature = (analogRead(A0) * 10 * 10) / 1024.0;							// dzielnik rezystorowy 1:10 [*10]
+	mux_switch(RUNTIME);
+	temperature = (temperature * 100) / calibration.temp_cal;					// Kalibracja
+	temperature = (temperature + old_temp) / 2;									// Srednia z dwoch pomiarow
+	old_temp = temperature;														// Zapamietaj poprzednia wartosc
+	old_temp = radians(100);
 }
 
 void computeTime()
@@ -2325,10 +2340,14 @@ void btnOBD2Connect(bool on_off)
 
 			renderToolbar(OBD2_AP);
 
-			if (String(txOBD2("ATI\r").startsWith(F("ATI\rELM327")))) renderToolbar(OBD2_IF);
+			if (String(txRawOBD2("ATI\r").startsWith(F("ATI\rELM327")))) renderToolbar(OBD2_IF);
 			
-			txOBD2((char *)"ATE0\r");											// Echo OFF
-			tft.drawString(txOBD2("AT@1\r"), 0, 112);							// DEBUG
+			initOBD2();
+			//tft.drawString(txATOBD2("@1"), 0, 108);							// Info
+			//tft.drawString(txATOBD2("DP"), 0, 116);							// DEBUG (default protocol)
+			//tft.drawString(txRawOBD2("0100\r"), 0, 108);						// PIDy
+			//tft.drawString(txRawOBD2("0101\r"), 0, 116);						// MIL, DTCs
+			//tft.drawString(txRawOBD2("0902\r"), 0, 108);						// VIN (nie dziala)
 		}
 		else																	// Nie udalo sie polaczyc z interfejsem OBD2
 		{
@@ -2372,7 +2391,15 @@ void btnOBD2Reads1(bool on_off) {}
 void btnOBD2Reads2(bool on_off) {}
 void btnOBD2Reads3(bool on_off) {}
 
-String txOBD2(char *request)
+String txATOBD2(const char *request)
+{
+	char command[32] = "";
+	sprintf(command, "AT%s\r", request);										// Doklej AT i CR
+	String response = txRawOBD2(command);										// Wyslij kompletna komende
+	return response;
+}
+
+String txRawOBD2(const char *request)
 {
 	String obd2_response = "";
 	client.print(request);														// Wyslij komende do ELM327
@@ -2393,6 +2420,16 @@ String txOBD2(char *request)
 	while (client.available()) obd2_response += char(client.read());			// Odpowiedz z interfejsu OBD2 i/lub ECU
 
 	return obd2_response;
+}
+
+void initOBD2()
+{
+	txATOBD2("D");																// Defaulty
+	txATOBD2("E0");																// Echo OFF
+	txATOBD2("H1");																// Header ON
+	txATOBD2("L0");																// LF OFF
+	txATOBD2("S0");																// Spacje OFF
+	txATOBD2("SP2");															// Protokol AUTO (2=VPW)
 }
 
 void meantimeSave(void)
