@@ -5,6 +5,8 @@
 
 #define HW_MAJOR_VER	1														// Wersja Hardware
 #define HW_MINOR_VER	0
+#define KNOTS2MS		0.51444445												// Przelicznik wezly na m/s
+#define KNOTS2KMH		1.852													// Przelicznik wezly na km/h
 
 #define I2C_EXP_A		0x20
 #define I2C_EERAM_A		0x50
@@ -26,12 +28,17 @@
 #define EERAM_BASE		0x0000													// Pierwszy adres w EERAM
 #define LAST_SCREEN		EERAM_BASE												// Ostatni ekran
 #define BRIGHTNESS		(LAST_SCREEN + 1)										// Jasnosc ekranu
-#define DIST1			(BRIGHTNESS + 2)										// Dystans odcinka
-#define DIST2			(DIST1 + 4)												// Dystans calkowity (impulsy lub dystans)
-#define LAST_FILE		(DIST2 + 4)												// Ostatnio uzywany plik z waypointami
-#define LAST_WPT		(LAST_FILE)												// Ostatni waypoint z listy do ktorego byla nawigacja
+#define DISTANCE1		(BRIGHTNESS + 2)										// Dystans odcinka
+#define DISTANCE2		(DISTANCE1 + 4)											// Dystans calkowity
+#define PULSES1			(DISTANCE2 + 4)											// Impulsy odcinka
+#define PULSES2			(PULSES1 + 4)											// Impulsy globalne
+#define IMP_SPEED_AVG	(PULSES2 + 4)
+#define TIME_AVG		(IMP_SPEED_AVG + 4)
+#define LAST_FILE		(PULSES2 + 4)											// Ostatnio uzywany plik z waypointami
+#define LAST_WPT		(LAST_FILE + 2)											// Ostatni waypoint z listy do ktorego byla nawigacja
 #define DIST_CAL		(LAST_WPT + 2)											// Kalibracja dystansu
-#define VOLT_CAL		(DIST_CAL + 2)											// Kalibracja napiecia
+#define SPEED_CAL		(DIST_CAL + 2)											// Kalibracja predkosci
+#define VOLT_CAL		(SPEED_CAL + 2)											// Kalibracja napiecia
 #define TEMP_CAL		(VOLT_CAL + 2)											// Kalibracja temperatury
 #define BRIGHT_CAL		(TEMP_CAL + 2)											// Kalibracja jasnosci
 
@@ -65,6 +72,7 @@
 #define CTRL_ON			ctrl_state[screen][1] |= 0x80							// Makro wlaczajace nieaktywna kontrolke
 #define CTRL_OFF		ctrl_state[screen][1] &= 0x7F							// Makro wylaczajace aktywna kontrolke
 
+enum DIST_SOURCES	{GPS = 0, IMP = 1};											// Zrodla sygnalu drogi
 enum MUX_STATES		{STARTUP = 1, RUNTIME = 0};									// Stany multipleksera sygnalow
 enum BUTTONS		{BTN_RELEASED = 0, BTN_RST = 7, BTN_UP = 5, BTN_DN = 6, BTN_LT = 4, BTN_RT = 3};
 enum TOOLBAR_ITEMS	{WIFI_XOFF, WIFI_XSTA, WIFI_XAP, GPS_NOFIX, GPS_FIX,
@@ -139,6 +147,16 @@ typedef struct
 	uint8_t		snr;
 } sat_t;																		// Parametry satelity
 
+typedef struct																	// Impulsy dystansow lub metry (dla GPS)
+{
+	uint32_t	imp_current;
+	uint32_t	imp_total;
+	uint32_t	gps_current;
+	uint32_t	gps_total;
+	uint32_t	imp_speed_avg;
+	uint32_t	time_avg;
+} pulses_t;
+
 bool ssaver_active;																// Flaga uaktywnienia screensavera
 bool connected;																	// Flaga WiFi
 bool internet;																	// Flaga dostepu do Internetu
@@ -148,19 +166,21 @@ bool sat_stats_ready;															// Statystyki satelitow gotowe
 bool counter_disable;															// Flaga pauzy metromierza
 volatile bool pcf_signal;														// Flaga przerwania z expandera
 volatile bool imp_signal;														// Flaga przerwania z impulsu
+enum DIST_SOURCES dist_source;													// Zrodlo dystansu
 enum MUX_STATES mux_state;														// Stan multipleksera
 enum SCREENS screen;															// Wyswietlany ekran
 enum NAVI_STATES navi_state;													// Stan nawigacji
 enum BTN_MODES btn_mode;														// Stan przelaczania ekrany/kontrolki
 enum TIMER_STATES timer_state;													// Stan stopera
 enum SDC_STATES sdc_state;														// Stan karty SD
-volatile uint32_t pulses_cnt1, pulses_cnt2, pulses_spd;							// Liczniki impulsow
+volatile pulses_t pulses;
+volatile uint16_t pulses_speed;
+uint8_t gps_distance;
+uint32_t distance_current, distance_total;
 int fw_upd_progress;															// Postep upgrade
 cal_t calibration;																// Kalibracje
-uint32_t distance1, distance2;													// Dystanse (odcinka i globalny)
 uint32_t cur_lat, cur_lon, old_lat, old_lon;									// Biezaca i poprzednia lokalizacja
-uint8_t speed;																	// Predkosc
-uint16_t volt;																	// Napiecie
+uint16_t volt, speed, speed_avg;												// Napiecie, predkosc, predkosc srednia
 uint16_t temperature;															// Temperatura
 uint32_t tmr_start_time;														// Czas stoperowy
 uint8_t ctrl_state[MAX_SCREENS][2];												// #def ekranow, pozycja ramki, nr aktywnej kontrolki

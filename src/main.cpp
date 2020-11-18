@@ -112,8 +112,12 @@ void setup()
 	SPIFFS_list();																// Ikona pamieci wg zajetosci
 	trySDCard();																// Test karty SD
 	renderToolbar(GPS_DATETIME);												// Czas
-	pulses_cnt1 = eeram_read32(DIST1);											// Odczyt dystansu odcinka
-	pulses_cnt2 = eeram_read32(DIST2);											// Odczyt dystansu globalnego
+	pulses.imp_current = eeram_read32(DISTANCE1);								// Odczyt dystansu odcinka
+	pulses.imp_total = eeram_read32(DISTANCE2);									// Odczyt dystansu globalnego
+	pulses.gps_current = eeram_read32(PULSES1);
+	pulses.gps_total = eeram_read32(PULSES2);
+	pulses.imp_speed_avg = eeram_read32(IMP_SPEED_AVG);
+	pulses.time_avg = eeram_read32(TIME_AVG);
 	computeDistance();															// Oblicz dystans
 	screen = (enum SCREENS) eeram.read(LAST_SCREEN);							// Ostatnio uzywany ekran
 	openScreen(screen, true);													// Otworz go
@@ -166,7 +170,7 @@ void loop()
 
 		imp_signal = false;														// Przerwanie obsluzone
 		ssaver_time = 0;														// Zerowanie licznika timeoutu
-		attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
+		//attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	}
 
 	if (!connected)																// Jezeli nie ma WiFi
@@ -253,17 +257,10 @@ void everySecTask()
 
 		if (save_time++ > SAVE_TIME)											// Co pewien czas
 		{
-			if (conf.getInt("imp_src") == 0)
-			{
-				eeram_save32(DIST1, distance1);									// Zapamietanie dystansow
-				eeram_save32(DIST2, distance2);
-			}
-			else
-			{
-				eeram_save32(DIST1, pulses_cnt1);								// Zapamietanie impulsow
-				eeram_save32(DIST2, pulses_cnt2);
-			}
-
+			eeram_save32(DISTANCE1, pulses.gps_current);						// Zapamietanie dystansow
+			eeram_save32(DISTANCE2, pulses.gps_total);
+			eeram_save32(PULSES1, pulses.imp_current);							// Zapamietanie impulsow
+			eeram_save32(PULSES2, pulses.imp_total);
 			save_time = 0;
 		}
 
@@ -288,14 +285,15 @@ void everySecTask()
 
 		cur_lat = gps.location.lat();											// Biezaca lokalizacja
 		cur_lon = gps.location.lng();
-		uint32_t dist = gps.distanceBetween(cur_lat, cur_lon, old_lat, old_lon);// Przebyty przez sekunde dystans
-		distance1 += dist;														// Kumulacja przebytego dystansu
-		distance2 += dist;
+		//uint32_t dist = gps.distanceBetween(cur_lat, cur_lon, old_lat, old_lon);// Przebyty przez sekunde dystans
+		gps_distance = gps.speed.knots() * KNOTS2MS / 1000;						// metry przebyte w ostatniej sekundzie
+		pulses.gps_current += gps_distance;										// Kumulacja przebytego dystansu
+		pulses.gps_total += gps_distance;
 		old_lat = cur_lat;														// Zapamietaj lokalizacje jako stara
 		old_lon = cur_lon;
 		course = (int16_t) gps.course.deg();									// Nowy kurs
 
-		if (dist) ssaver_time = 0;												// Wyzeruj czas nieaktywnosci, jezeli zmiana
+		if (gps_distance) ssaver_time = 0;										// Wyzeruj czas nieaktywnosci, jezeli zmiana
 
 		if (navi_state == REC_TRK)												// Jezeli nagrywanie gpx
 		{
@@ -306,7 +304,7 @@ void everySecTask()
 			}
 		}
 
-		if (abs(course - old_course) > COURSE_DIFF)								// Jezeli kurs sie zmienil o co najmniej 4 stopnie
+		if (abs(course - old_course) > COURSE_DIFF)								// Jezeli kurs sie zmienil o co najmniej #def
 		{
 			new_course = true;													// Ustaw flage
 			old_course = course;												// Zapamietaj ten kurs
@@ -346,9 +344,7 @@ void setupPins()
 {
 	// Konfiguracja przerwania dla impulsu zewnetrznego
 	pinMode(IMP_IRQ_PIN, INPUT_PULLUP);
-
-	if (conf.getInt("imp_src") == 0) attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
-
+	attachInterrupt(IMP_IRQ_PIN, imp_irq, FALLING);
 	// Konfiguracja przerwania dla zmiany na ekspanderze I2C
 	pinMode(I2C_IRQ_PIN, INPUT_PULLUP);
 	attachInterrupt(I2C_IRQ_PIN, i2c_irq, FALLING);
@@ -357,15 +353,18 @@ void setupPins()
 
 ICACHE_RAM_ATTR void imp_irq(void)
 {
-	if (!counter_disable)														// Jezeli nie ma blokady metromierza
+	if (!fix)																	// Jezeli brak sygnalu GPS
 	{
-		pulses_cnt1++;															// Zwieksz liczniki impulsow
-		pulses_cnt2++;
-		imp_signal = true;														// Flaga pojawienia sie impulsu
-		detachInterrupt(IMP_IRQ_PIN);											// Odepnij przerwania, bo inaczej CRASH
-	}
+		if (!counter_disable)													// Jezeli nie ma blokady metromierza
+		{
+			pulses.imp_current++;												// Zwieksz liczniki impulsow
+			pulses.imp_total++;
+			imp_signal = true;													// Flaga pojawienia sie impulsu
+			//detachInterrupt(IMP_IRQ_PIN);										// Odepnij przerwania, bo inaczej CRASH
+		}
 
-	pulses_spd++;																// Impulsy do pomiaru predosci
+		pulses_speed++;															// Impulsy do pomiaru predosci
+	}
 }
 
 ICACHE_RAM_ATTR void i2c_irq(void)
@@ -466,24 +465,24 @@ void readConf()
 	            "},"
 	            "{"
 	            "'name':'obd2_net',"
-	            "'label':'Sieć dla OBD2',"
+	            "'label':'Sieć WiFi OBD2',"
 	            "'type':");
 	params += String(INPUTTEXT);
 	params += F(","
 	            "'default':'OBD2'"
 	            "},"
-	            "{"
-	            "'name':'imp_src',"
-	            "'label':'Dane o dystansie',"
-	            "'type':");
-	params += String(INPUTRADIO);
-	params += F(","
-	            "'options':["
-	            "{'v':'0','l':'GPS'},"
-	            "{'v':'1','l':'Impulsator'}],"
-	            "'default':'g'"
-	            "},"
-	            "{"
+	            /* 	            "{"
+	            	            "'name':'imp_src',"
+	            	            "'label':'Dane o dystansie',"
+	            	            "'type':");
+	            	params += String(INPUTRADIO);
+	            	params += F(","
+	            	            "'options':["
+	            	            "{'v':'0','l':'GPS'},"
+	            	            "{'v':'1','l':'Impulsator'}],"
+	            	            "'default':'g'"
+	            	            "},"
+	             */	            "{"
 	            "'name':'tz',"
 	            "'label':'Strefa czasowa',"
 	            "'type':");
@@ -1190,13 +1189,8 @@ void keyShortPress(enum BUTTONS button)
 				switch (screen)
 				{
 					case SCR_DIST:
-						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
-						else
-						{
-							pulses_cnt1 = 0;									// Skasuj licznik impulsow
-							computeDistance();									// Przelicz dystanse
-						}
-
+						pulses.imp_current = 0;									// Skasuj dystans odcinka
+						computeDistance();										// Przelicz dystanse
 						renderScreen(screen);									// Aktualizuj ekran
 						break;
 
@@ -1219,12 +1213,8 @@ void keyShortPress(enum BUTTONS button)
 						break;
 
 					case SCR_NAVI:
-						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
-						else
-						{
-							pulses_cnt1 = 0;									// Skasuj licznik impulsow
-							computeDistance();									// Przelicz dystanse
-						}
+						pulses.imp_current = 0;									// Skasuj dystans odcinka
+						computeDistance();										// Przelicz dystanse
 
 						if (navi_state == REC_WPTS)	addWpt2Wpt(false);			// Dodaj kolejny waypoint do pliku gpx, jezeli aktywny zapis
 
@@ -1232,13 +1222,8 @@ void keyShortPress(enum BUTTONS button)
 						break;
 
 					case SCR_COMBO:
-						if (conf.getInt("imp_src") == 0) distance1 = 0;			// Skasuj dystans odcinka
-						else
-						{
-							pulses_cnt1 = 0;
-							computeDistance();
-						}
-
+						pulses.imp_current = 0;									// Skasuj dystans odcinka
+						computeDistance();
 						renderScreen(screen);									// Aktualizuj ekran
 						break;
 
@@ -1338,13 +1323,8 @@ void keyLongPress(enum BUTTONS button)
 				case SCR_COMBO:
 					if (btn_mode == CHG_SCR)									// W trybie zmiany ekranow
 					{
-						if (conf.getInt("imp_src") == 0) distance2 = 0;			// Skasuj dystans calkowity
-						else
-						{
-							pulses_cnt2 = 0;
-							computeDistance();
-						}
-
+						pulses.imp_total = 0;									// Skasuj dystans globalny
+						computeDistance();
 						renderScreen(screen);									// Aktualizuj ekran
 					}
 
@@ -1590,8 +1570,8 @@ void renderScreen(enum SCREENS scr)
 			tft.setTextFont(7);													// Font 7segment
 			tft.setCursor(0, 33);												// Gorny lewy rog
 			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-			tft.printf("%05d", distance1);
-			cursor_pos = computeEraseArea(distance2, old_distance2, 6);			// Selektywne zamazywanie dystansu globalnego Max 10^6 metrow
+			tft.printf("%05d", pulses.gps_current);
+			cursor_pos = computeEraseArea(distance_total, old_distance2, 6);	// Selektywne zamazywanie dystansu globalnego Max 10^6 metrow
 
 			if (cursor_pos > 3)													// Jezeli zmiany ponizej tysiaca
 				tft.fillRect(160 - ((7 - cursor_pos) * 21),
@@ -1607,11 +1587,11 @@ void renderScreen(enum SCREENS scr)
 			tft.setFreeFont(&FreeMonoBold18pt7b);
 			tft.setTextColor(TFT_GOLD, TFT_BLACK);								// Kolor tla nie dziala dla FreeFont, wiec trzeba czyscic
 			tft.setCursor(160 - (3 * 21), 104);
-			tft.printf("%03d", distance2 % 1000);								// Kilometry
+			tft.printf("%03d", distance_total % 1000);							// Kilometry
 			tft.setCursor(0, 104);
-			tft.printf("%04d", (distance2 % 10000) / 1000);						// Metry
+			tft.printf("%04d", (distance_total % 10000) / 1000);				// Metry
 			tft.fillCircle(90, 102, 2, TFT_GOLD);								// Kropka oddziela kilometry od metrow
-			old_distance2 = distance2;											// Zapamietaj poprzednie wartosci
+			old_distance2 = distance_total;										// Zapamietaj poprzednie wartosci
 			break;
 
 		case SCR_TIME:
@@ -1670,10 +1650,10 @@ void renderScreen(enum SCREENS scr)
 				tft.setTextSize(2);
 				tft.setCursor(4, 94);
 				tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-				tft.printf_P("%4d.%03d", distance1 / 1000, distance1 % 1000);	// Dystans odcinka
+				tft.printf_P("%4d.%03d", distance_current / 1000, distance_current % 1000);	// Dystans odcinka
 				tft.setCursor(4, 110);
 				tft.setTextColor(TFT_GOLD, TFT_BLACK);
-				tft.printf_P("%04d.%03d", distance2 / 1000, distance2 % 1000);	// Dystans globalny
+				tft.printf_P("%04d.%03d", distance_total / 1000, distance_total % 1000);	// Dystans globalny
 			}
 			else
 			{
@@ -1721,10 +1701,10 @@ void renderScreen(enum SCREENS scr)
 			tft.setTextSize(2);
 			tft.setCursor(4, 34);
 			tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-			tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);			// Dystans odcinka
+			tft.printf("%4d.%03d", distance_current / 1000, distance_current % 1000);			// Dystans odcinka
 			tft.setCursor(4, 50);
 			tft.setTextColor(TFT_GOLD, TFT_BLACK);
-			tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);		// Dystans globalny
+			tft.printf("%04d.%03d", distance_total / 1000, distance_total % 1000);		// Dystans globalny
 			tft.setTextSize(1);
 			tft.setTextColor(TFT_WHITE, TFT_BLACK);
 			tft.setCursor(4 + 7 * 6, 66);
@@ -1990,28 +1970,36 @@ void renderToolbar(enum TOOLBAR_ITEMS item)
 
 void computeDistance()
 {
-	if (conf.getInt("imp_src") == 1)
+	if (fix)
 	{
-		distance1 = (pulses_cnt1 * 100) / calibration.dist_cal;					// Obliczenie dystansu
-		distance2 = (pulses_cnt2 * 100) / calibration.dist_cal;
+		if (!counter_disable)
+		{
+			pulses.imp_current += gps_distance;
+			pulses.imp_total += gps_distance;
+		}
+
+		pulses.imp_speed_avg += gps_distance * calibration.dist_cal / 100;	// Przeliczenie metrow na "impulsy"
 	}
 
-	if (distance1 > 9999999) distance1 = 9999999;
+	distance_current = (pulses.imp_current * 100) / calibration.dist_cal;					// Obliczenie dystansu
+	distance_total = (pulses.imp_total * 100) / calibration.dist_cal;
 
-	if (distance2 > 9999999) distance2 = 9999999;
+	if (distance_current > 9999999) distance_current = 9999999;
+
+	if (distance_total > 9999999) distance_total = 9999999;
 }
 
 void computeSpeed()
 {
 	static uint8_t old_speed;
 
-	if (conf.getInt("imp_src") == 1)
+	if (dist_source == IMP)
 	{
-		speed = (pulses_spd * 100) / calibration.dist_cal;						// Metry (czyli po sekundzie predkosc [m/s])
+		speed = (pulses_speed * 100) / calibration.dist_cal;					// Metry (czyli po sekundzie predkosc [m/s])
 		speed *= 3.6;															// Predkosc [km/h]
 		speed = (speed + old_speed) / 2;										// Srednia z dwoch pomiarow
 		old_speed = speed;														// Zapamietaj poprzednia wartosc
-		pulses_spd = 0;															// Wyzeruj licznik impulsow/s
+		pulses_speed = 0;														// Wyzeruj licznik impulsow/s
 	}
 	else speed = gps.speed.kmph();
 }
@@ -2263,10 +2251,10 @@ void openCombo()
 	tft.setTextSize(2);
 	tft.setCursor(4, 34);
 	tft.setTextColor(TFT_YELLOW);
-	tft.printf("%4d.%03d", distance1 / 1000, distance1 % 1000);
+	tft.printf("%4d.%03d", distance_current / 1000, distance_current % 1000);
 	tft.setCursor(4, 50);
 	tft.setTextColor(TFT_GOLD);
-	tft.printf("%04d.%03d", distance2 / 1000, distance2 % 1000);
+	tft.printf("%04d.%03d", distance_total / 1000, distance_total % 1000);
 	tft.setTextSize(1);
 	tft.setTextColor(TFT_WHITE, TFT_BLACK);
 	tft.setCursor(4, 66);
@@ -2341,7 +2329,7 @@ void btnOBD2Connect(bool on_off)
 			renderToolbar(OBD2_AP);
 
 			if (String(txRawOBD2("ATI\r").startsWith(F("ATI\rELM327")))) renderToolbar(OBD2_IF);
-			
+
 			initOBD2();
 			//tft.drawString(txATOBD2("@1"), 0, 108);							// Info
 			//tft.drawString(txATOBD2("DP"), 0, 116);							// DEBUG (default protocol)
@@ -2455,54 +2443,25 @@ void satCustomInit()
 void btnStopStart(bool on_off) {counter_disable = on_off;}						// Zmien flage naliczania dystansu
 void btnDecDist(bool on_off)
 {
-	if (conf.getInt("imp_src") == 0)											// GPS
-	{
-		distance1 -= 10;														// Zmniejsz dystancse o okolo 10m
-		distance2 -= 10;
-		computeDistance();
-	}
-	else
-	{
-		uint32_t temp = distance2 - 10;
+	if (pulses.imp_current) pulses.imp_current--;								// Tylko jezeli jest z czego odejmowac
 
-		while (temp < distance2)												// Zmniejszaj liczbe impulsow az zmieni sie o 10
-		{
-			if (pulses_cnt1) pulses_cnt1--;										// Tylko jezeli jest z czego odejmowac
+	if (pulses.imp_total) pulses.imp_total--;
 
-			if (pulses_cnt2) pulses_cnt2--;
-
-			computeDistance();
-		}
-	}
-
+	computeDistance();
 	CTRL_OFF;
 	openScreen(screen, false);
 }
 void btnIncDist(bool on_off)
 {
-	if (conf.getInt("imp_src") == 0)											// GPS
-	{
-		distance1 += 10;
-		distance2 += 10;
-		computeDistance();
-	}
-	else
-	{
-		uint32_t temp = distance2 + 10;
+	if (pulses.imp_current < 999999) pulses.imp_current++;
 
-		if (temp > 9999999) temp = distance2;									// Zabezpieczenie przed przekroczeniem zakresu
+	if (pulses.imp_total < 999999) pulses.imp_total++;
 
-		while (temp > distance2)
-		{
-			pulses_cnt1++;
-			pulses_cnt2++;
-			computeDistance();
-		}
-	}
-
+	computeDistance();
 	CTRL_OFF;
 	openScreen(screen, false);
 }
+
 void btnSaveTrk(bool on_off)
 {
 	if (!fix)
