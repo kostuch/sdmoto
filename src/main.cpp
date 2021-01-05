@@ -2,11 +2,12 @@
 #include <Wire.h>																// I2C
 #include <SPI.h>																// SPI
 #include <Ticker.h>																// Scheduler
-#include <SdFat.h>																// SdFat (2.0 beta)
+#include <SdFat.h>																// SdFat (2.0)
 #include <FS.h>																	// SPIFFS
 #include <pcf8574_esp.h>														// PCF8574/PCF8575
 #include <ESP8266WiFi.h>														// WiFi
 #include <ESP8266WiFiMulti.h>													// WiFi
+#include <ESP8266mDNS.h>														// .local
 #include <ESP8266WebServer.h>													// Web Server - konfiguracja
 #include <WebConfig.h>															// Web Server - konfiguracja
 #include <ESP8266HTTPClient.h>													// OTA http://www.skeletondevices.com
@@ -38,12 +39,9 @@ TinyGPSCustom		satNumber[4];												// Statystyki satelitow (cztery w kazdej
 TinyGPSCustom		elevation[4];
 TinyGPSCustom		azimuth[4];
 TinyGPSCustom		snr[4];
-SdFat				sd;															// Karta SD
-File				dir;														// Katalog na SD
-File				file;														// Plik na SD
 ESP8266WebServer	web_server;													// Web server
 WebConfig			conf;														// Konfigurator webowy
-fs::File			SPIFFS_file;												// Plik na SPIFFS
+//File				SPIFFS_file;												// Plik na SPIFFS
 ESP8266WiFiMulti	wifi_multi;													// WiFi
 WiFiClient			client;														// Klient wifi (dla OBD2)
 WiFiEventHandler	SAPstationConnectedHandler;
@@ -56,6 +54,7 @@ SimpleList<String>	wptfile_lst;												// Lista plikow z waypointami
 SimpleList<wpt_t>	wpt_lst;
 SimpleList<rte_t>	rte_lst;
 SimpleList<trk_t>	trk_lst;
+MDNSResponder		mdns;
 // Predkosciomierz do 150km/h
 HGauge speed_gauge(&tft, 2, 74, 96, 16, TFT_BLACK, TFT_WHITE, TFT_RED, false, "", 1, G_PLAIN, 0, 150);
 // Woltomierz 10-16V
@@ -69,8 +68,31 @@ HGauge satsu_gauge(&tft, 2, 50, 94, 16, TFT_BLACK, TFT_WHITE, TFT_GREEN, true, "
 // Precyzja lokalizacji
 HGauge dop_gauge(&tft, 2, 66, 94, 16, TFT_BLACK, TFT_WHITE, TFT_CYAN, false, "HDOP", 1, G_M_R2G, 0, MAX_DOP - 1);
 
+// SD_FAT_TYPE = 0 for SdFat/File as defined in SdFatConfig.h,
+// 1 for FAT16/FAT32, 2 for exFAT, 3 for FAT16/FAT32 and exFAT.
+#define error(s) sd.errorHalt(&tft, F(s))
+#define SD_FAT_TYPE 1
 #define SD_CS_PIN 0 															// Fake value dla SdFat
 #define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI)							// Magia dla SdFat
+#if SD_FAT_TYPE == 0
+	SdFat sd;
+	File sd_file;
+	File sd_dir;
+#elif SD_FAT_TYPE == 1
+	SdFat32 sd;
+	File32 sd_file;
+	File32 sd_dir;
+#elif SD_FAT_TYPE == 2
+	SdExFat sd;
+	ExFile sd_file;
+	ExFile sd_dir;
+#elif SD_FAT_TYPE == 3
+	SdFs sd;
+	FsFile sd_file;
+	FsFile sd_dir;
+#else  // SD_FAT_TYPE
+	#error Invalid SD_FAT_TYPE
+#endif  // SD_FAT_TYPE
 
 void sdCsInit(SdCsPin_t pin) {}													// Inicjalizacja CS (Puste!)
 
@@ -87,7 +109,7 @@ void setup()
 {
 	Serial.begin(9600);															// Init UART (predkosc jak dla GPS)
 	SPIFFS.begin();																// Init SPIFFS
-	Wire.setClock(500000);														// Predkosc I2C (Max!!!)
+	Wire.setClock(400000);														// Predkosc I2C (Max!!!)
 	Wire.begin(SDA_PAD, SCL_PAD);												// Init I2C
 	pcf8575.begin();															// Init PCF8574
 	setupPins();																// Ustawienie pinow GPIO
@@ -195,6 +217,8 @@ void loop()
 
 void bootstrap()
 {
+	fs::File SPIFFS_file;
+
 	if (((pcf8575.read8() & 0xF8) ^ 0xF8) & (1 << BTN_RST))						// Jezeli wcisniety przycisk RST
 	{
 		Dir dir = SPIFFS.openDir("/");
@@ -204,16 +228,16 @@ void bootstrap()
 
 		if (!Update.begin(maxSketchSpace, U_FLASH)) debugE("ERROR");			// Poczatek odtwarzania
 
-		while (file.available())												// Do konca pliku
+		while (SPIFFS_file.available())												// Do konca pliku
 		{
 			uint8_t ibuffer[128];
-			file.read((uint8_t *)ibuffer, 128);
+			SPIFFS_file.read((uint8_t *)ibuffer, 128);
 			Update.write(ibuffer, sizeof(ibuffer));
 		}
 
 		debugI("Koniec odtwarzania!");
 		debugI("Wynik: %d", Update.end(true));
-		file.close();
+		SPIFFS_file.close();
 		mux_switch(STARTUP);													// Multiplekser w pozycji poczatkowej
 		ESP.restart();															// Restart
 	}
@@ -379,7 +403,7 @@ void trySDCard()
 		renderToolbar(SD_OFF);													// Brak karty SD
 		sdc_state = SDC_OFF;
 	}
-	else if (!dir.open("/"))
+	else if (!sd_dir.open("/"))
 	{
 		renderToolbar(SD_NOOK);													// Karta bez filesystemu
 		sdc_state = SDC_NOOK;
@@ -425,15 +449,15 @@ void readConf()
 	String params = F("["
 	                  "{"
 	                  "'name':'dev_pwd',"
-	                  "'label':'Hasło urządzenia',"
+	                  "'label':'Hasło sieci urządzenia',"
 	                  "'type':");
 	params += String(INPUTPASSWORD);
 	params += F(","
-	            "'default':'SDMoto18'"
+	            "'default':'sdmoto18'"
 	            "},"
 	            "{"
 	            "'name':'ssid1',"
-	            "'label':'Nazwa sieci WiFi',"
+	            "'label':'Twoja sieć WiFi',"
 	            "'type':");
 	params += String(INPUTTEXT);
 	params += F(","
@@ -449,7 +473,7 @@ void readConf()
 	            "},"
 	            "{"
 	            "'name':'ssid2',"
-	            "'label':'Nazwa sieci WiFi',"
+	            "'label':'Sieć WiFi (auto/telefon)',"
 	            "'type':");
 	params += String(INPUTTEXT);
 	params += F(","
@@ -471,18 +495,21 @@ void readConf()
 	params += F(","
 	            "'default':'OBD2'"
 	            "},"
-	            /* 	            "{"
-	            	            "'name':'imp_src',"
-	            	            "'label':'Dane o dystansie',"
-	            	            "'type':");
-	            	params += String(INPUTRADIO);
-	            	params += F(","
-	            	            "'options':["
-	            	            "{'v':'0','l':'GPS'},"
-	            	            "{'v':'1','l':'Impulsator'}],"
-	            	            "'default':'g'"
-	            	            "},"
-	             */	            "{"
+	            "{"
+
+	            "'name':'imp_src',"
+	            "'label':'Dane o dystansie',"
+	            "'type':");
+	params += String(INPUTRADIO);
+	params += F(","
+	            "'options':["
+	            "{'v':'0','l':'GPS'},"
+	            "{'v':'1','l':'Impulsator'},"
+	            "{'v':'2','l':'Automat'}],"
+	            "'default':'2'"
+	            "},"
+	            "{"
+ 
 	            "'name':'tz',"
 	            "'label':'Strefa czasowa',"
 	            "'type':");
@@ -578,6 +605,8 @@ String getContentType(String filename)
 
 bool handleFileRead(String path)
 {
+	fs::File SPIFFS_file;
+
 	if (path.endsWith("/"))	path += "index.htm";
 
 	String contentType = getContentType(path);
@@ -587,9 +616,9 @@ bool handleFileRead(String path)
 	{
 		if (SPIFFS.exists(pathWithGz)) path += ".gz";
 
-		fs::File file = SPIFFS.open(path, "r");
-		web_server.streamFile(file, contentType);
-		file.close();
+		SPIFFS_file = SPIFFS.open(path, "r");
+		web_server.streamFile(SPIFFS_file, contentType);
+		SPIFFS_file.close();
 		return true;
 	}
 
@@ -598,6 +627,8 @@ bool handleFileRead(String path)
 
 void handleFileUpload()
 {
+	static fs::File SPIFFS_file;
+
 	if (web_server.uri() != "/list") return;
 
 	HTTPUpload &upload = web_server.upload();
@@ -611,23 +642,26 @@ void handleFileUpload()
 		if (!filename.startsWith("/")) filename = "/" + filename;
 
 		SPIFFS_file = SPIFFS.open(filename, "w");
-		filename = String();
+		debugI("Zaczynam %s", filename.c_str());
 	}
 	else if (upload.status == UPLOAD_FILE_WRITE)
 	{
 		if (SPIFFS_file) SPIFFS_file.write(upload.buf, upload.currentSize);
+
+		debugI("Zapisane %d", upload.currentSize);
 	}
 	else if (upload.status == UPLOAD_FILE_END)
 	{
 		if (SPIFFS_file) SPIFFS_file.close();
 
-		//debugI("Zaladowany plik %s o rozmiarze %d", filename.c_str(), upload.totalSize);
+		debugI("Zaladowany plik %s o rozmiarze %d", filename.c_str(), upload.totalSize);
 	}
 }
 
 String SPIFFS_list()
 {
-	fs::FSInfo fs_info;
+	FSInfo fs_info;
+	fs::File SPIFFS_file;
 	SPIFFS.info(fs_info);
 	int32_t free_space = (fs_info.totalBytes - fs_info.usedBytes) / 1024;		// Kilobajty
 	uint8_t spiffs_usage = (fs_info.usedBytes * 100) / fs_info.totalBytes;		// Procent zajetosci SPIFFS
@@ -636,14 +670,14 @@ String SPIFFS_list()
 	else if (spiffs_usage < 80) renderToolbar(MEM_AVG);
 	else renderToolbar(MEM_FULL);
 
-	fs::Dir dir = SPIFFS.openDir("/");
+	Dir spiffs_dir = SPIFFS.openDir("/");
 	String page = HTMLHeader(false);
 	page += F("<h3>Dostępne w pamięci pliki</h3>\n");
 
-	while (dir.next())
+	while (spiffs_dir.next())
 	{
-		String FileName = dir.fileName();
-		SPIFFS_file = dir.openFile("r");
+		String FileName = spiffs_dir.fileName();
+		SPIFFS_file = spiffs_dir.openFile("r");
 		String FileSize = String(SPIFFS_file.size());
 		page += F("<form method='POST' action='/list'>\n");
 		page += F("<p style='text-align: left; font-family: \"Courier New\", Courier, monospace'><a href='");
@@ -733,6 +767,9 @@ void initWiFiStaAp(bool fallback2AP)
 		startWebServer();														// Wystartuj Serwer www
 		debugInit();
 		ap_time = 0;															// Wyzeruj timeout na potrzeby reconnecta
+		mdns.begin("sdmoto");
+		mdns.addService("http", "tcp", 80);
+		mdns.update();
 	}
 }
 
@@ -978,6 +1015,7 @@ void startWebServer()
 	web_server.on(F("/list"), HTTP_POST, []()
 	{
 		if (web_server.hasArg("DELETE")) SPIFFS.remove(web_server.arg("DELETE"));
+		else handleFileUpload();
 
 		web_server.send(200, F("text/html"), SPIFFS_list());
 	});
@@ -1114,23 +1152,23 @@ bool tftImgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap
 
 void SD_list()
 {
-	if (!dir.open("/"))	Serial.println("dir.open failed");
+	if (!sd_dir.open("/"))	Serial.println("dir.open failed");
 
-	while (file.openNext(&dir, O_RDONLY))
+	while (sd_file.openNext(&sd_dir, O_RDONLY))
 	{
-		file.printFileSize(&Serial);
+		sd_file.printFileSize(&Serial);
 		Serial.write(' ');
-		file.printModifyDateTime(&Serial);
+		sd_file.printModifyDateTime(&Serial);
 		Serial.write(' ');
-		file.printName(&Serial);
+		sd_file.printName(&Serial);
 
-		if (file.isDir()) Serial.write('/');
+		if (sd_file.isDir()) Serial.write('/');
 
 		Serial.println();
-		file.close();
+		sd_file.close();
 	}
 
-	if (dir.getError())	Serial.println("openNext failed");
+	if (sd_dir.getError())	Serial.println("openNext failed");
 	else Serial.println("Done!");
 }
 
@@ -2007,7 +2045,7 @@ void computeSpeed()
 void computeVolt()
 {
 	static uint16_t old_volt;
-	debugI("Volt (raw): %d", analogRead(A0));
+	//debugI("Volt (raw): %d", analogRead(A0));
 	volt = (analogRead(A0) * 22 * 10) / 1024.0;									// dzielnik rezystorowy 1:22 [*10]
 	volt = (volt * 100) / calibration.volt_cal;									// Kalibracja
 	volt = (volt + old_volt) / 2;												// Srednia z dwoch pomiarow
@@ -2018,7 +2056,7 @@ void computeTemp()
 {
 	static uint16_t old_temp;
 	mux_switch(STARTUP);
-	debugI("Temperature (raw): %d", analogRead(A0));
+	//debugI("Temperature (raw): %d", analogRead(A0));
 	temperature = (analogRead(A0) * 10 * 10) / 1024.0;							// dzielnik rezystorowy 1:10 [*10]
 	mux_switch(RUNTIME);
 	temperature = (temperature * 100) / calibration.temp_cal;					// Kalibracja
@@ -2464,6 +2502,8 @@ void btnIncDist(bool on_off)
 
 void btnSaveTrk(bool on_off)
 {
+	fs::File SPIFFS_file;
+
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
@@ -2497,6 +2537,7 @@ void btnSaveTrk(bool on_off)
 }
 void addWpt2Trk(void)
 {
+	fs::File SPIFFS_file;
 	char wpt_date[22];															// Data zalogowania WPT
 	sprintf(wpt_date, "%4d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(),
 	        gps.date.day(), ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute(), gps.time.second());
@@ -2515,6 +2556,8 @@ void addWpt2Trk(void)
 }
 void btnSaveWpt(bool on_off)
 {
+	fs::File SPIFFS_file;
+
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
@@ -2540,6 +2583,7 @@ void btnSaveWpt(bool on_off)
 }
 void addWpt2Wpt(bool reset_num)
 {
+	fs::File SPIFFS_file;
 	static uint16_t wpt_num;													// Licznik waypointow
 
 	if (reset_num) wpt_num = 0;													// Kasowanie numeru waypointa, jezeli nowy plik
@@ -2622,6 +2666,7 @@ void btnCancelFile(bool on_off)
 }
 void parseGpxFile()
 {
+	fs::File SPIFFS_file;
 	wpt_lst.clear();															// Wyczysc listy waypointow
 	rte_lst.clear();															// Routow
 	trk_lst.clear();															// Trackow

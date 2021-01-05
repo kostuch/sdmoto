@@ -34,7 +34,7 @@
 #define PULSES2			(PULSES1 + 4)											// Impulsy globalne
 #define IMP_SPEED_AVG	(PULSES2 + 4)
 #define TIME_AVG		(IMP_SPEED_AVG + 4)
-#define LAST_FILE		(PULSES2 + 4)											// Ostatnio uzywany plik z waypointami
+#define LAST_FILE		(TIME_AVG + 4)											// Ostatnio uzywany plik z waypointami
 #define LAST_WPT		(LAST_FILE + 2)											// Ostatni waypoint z listy do ktorego byla nawigacja
 #define DIST_CAL		(LAST_WPT + 2)											// Kalibracja dystansu
 #define SPEED_CAL		(DIST_CAL + 2)											// Kalibracja predkosci
