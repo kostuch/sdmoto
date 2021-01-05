@@ -41,7 +41,7 @@ TinyGPSCustom		azimuth[4];
 TinyGPSCustom		snr[4];
 ESP8266WebServer	web_server;													// Web server
 WebConfig			conf;														// Konfigurator webowy
-//File				SPIFFS_file;												// Plik na SPIFFS
+fs::File			SPIFFS_file;												// Plik na SPIFFS
 ESP8266WiFiMulti	wifi_multi;													// WiFi
 WiFiClient			client;														// Klient wifi (dla OBD2)
 WiFiEventHandler	SAPstationConnectedHandler;
@@ -217,8 +217,6 @@ void loop()
 
 void bootstrap()
 {
-	fs::File SPIFFS_file;
-
 	if (((pcf8575.read8() & 0xF8) ^ 0xF8) & (1 << BTN_RST))						// Jezeli wcisniety przycisk RST
 	{
 		Dir dir = SPIFFS.openDir("/");
@@ -605,8 +603,6 @@ String getContentType(String filename)
 
 bool handleFileRead(String path)
 {
-	fs::File SPIFFS_file;
-
 	if (path.endsWith("/"))	path += "index.htm";
 
 	String contentType = getContentType(path);
@@ -627,8 +623,6 @@ bool handleFileRead(String path)
 
 void handleFileUpload()
 {
-	static fs::File SPIFFS_file;
-
 	if (web_server.uri() != "/list") return;
 
 	HTTPUpload &upload = web_server.upload();
@@ -661,7 +655,6 @@ void handleFileUpload()
 String SPIFFS_list()
 {
 	FSInfo fs_info;
-	fs::File SPIFFS_file;
 	SPIFFS.info(fs_info);
 	int32_t free_space = (fs_info.totalBytes - fs_info.usedBytes) / 1024;		// Kilobajty
 	uint8_t spiffs_usage = (fs_info.usedBytes * 100) / fs_info.totalBytes;		// Procent zajetosci SPIFFS
@@ -2502,8 +2495,6 @@ void btnIncDist(bool on_off)
 
 void btnSaveTrk(bool on_off)
 {
-	fs::File SPIFFS_file;
-
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
@@ -2537,7 +2528,6 @@ void btnSaveTrk(bool on_off)
 }
 void addWpt2Trk(void)
 {
-	fs::File SPIFFS_file;
 	char wpt_date[22];															// Data zalogowania WPT
 	sprintf(wpt_date, "%4d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(),
 	        gps.date.day(), ((gps.time.hour() + conf.getInt("tz")) % 24), gps.time.minute(), gps.time.second());
@@ -2556,8 +2546,6 @@ void addWpt2Trk(void)
 }
 void btnSaveWpt(bool on_off)
 {
-	fs::File SPIFFS_file;
-
 	if (!fix)
 	{
 		tftMsg(F("Brak FIXa!!!"));
@@ -2583,7 +2571,6 @@ void btnSaveWpt(bool on_off)
 }
 void addWpt2Wpt(bool reset_num)
 {
-	fs::File SPIFFS_file;
 	static uint16_t wpt_num;													// Licznik waypointow
 
 	if (reset_num) wpt_num = 0;													// Kasowanie numeru waypointa, jezeli nowy plik
@@ -2666,7 +2653,6 @@ void btnCancelFile(bool on_off)
 }
 void parseGpxFile()
 {
-	fs::File SPIFFS_file;
 	wpt_lst.clear();															// Wyczysc listy waypointow
 	rte_lst.clear();															// Routow
 	trk_lst.clear();															// Trackow
